@@ -1,0 +1,22 @@
+#ifndef MIOS_FS_H
+#define MIOS_FS_H
+#include <stddef.h>
+#include <stdint.h>
+#define MIOS_FS_OK 0
+#define MIOS_FS_NOT_FOUND -1
+#define MIOS_FS_EXISTS -2
+#define MIOS_FS_NOT_DIR -3
+#define MIOS_FS_IS_DIR -4
+#define MIOS_FS_FULL -5
+#define MIOS_FS_BAD_PATH -6
+#define MIOS_FS_BUFFER -7
+#define MIOS_FS_IO -8
+void mios_fs_init(void);
+int mios_fs_cd(uint16_t cwd, const char *path);
+int mios_fs_pwd(uint16_t cwd, char *out, size_t cap);
+int mios_fs_ls(uint16_t cwd, const char *path, char *out, size_t cap);
+int mios_fs_mkdir(uint16_t cwd, const char *path);
+int mios_fs_touch(uint16_t cwd, const char *path);
+int mios_fs_cat(uint16_t cwd, const char *path, char *out, size_t cap);
+int mios_fs_write(uint16_t cwd, const char *path, const char *text);
+#endif

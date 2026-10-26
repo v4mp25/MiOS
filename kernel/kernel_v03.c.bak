@@ -1,0 +1,148 @@
+#include <stdint.h>
+#include <stddef.h>
+
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
+
+static volatile uint16_t *const VGA =
+    (volatile uint16_t *)0xB8000;
+
+static size_t fila = 0;
+static size_t columna = 0;
+static uint8_t color = 0x0F;
+
+static inline uint8_t inb(uint16_t puerto) {
+    uint8_t valor;
+    __asm__ volatile ("inb %1, %0"
+        : "=a"(valor) : "Nd"(puerto));
+    return valor;
+}
+
+void limpiar_pantalla(void) {
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
+        VGA[i] = ((uint16_t)color << 8) | ' ';
+
+    fila = 0;
+    columna = 0;
+}
+
+void poner_caracter(char c) {
+    if (c == '\n') {
+        columna = 0;
+        fila++;
+    } else if (c == '\b') {
+        if (columna > 0) {
+            columna--;
+        } else if (fila > 0) {
+            fila--;
+            columna = VGA_WIDTH - 1;
+        } else {
+            return;
+        }
+
+        VGA[fila * VGA_WIDTH + columna] =
+            ((uint16_t)color << 8) | ' ';
+    } else {
+        if (columna >= VGA_WIDTH) {
+            columna = 0;
+            fila++;
+        }
+
+        if (fila >= VGA_HEIGHT)
+            limpiar_pantalla();
+
+        VGA[fila * VGA_WIDTH + columna] =
+            ((uint16_t)color << 8) | c;
+        columna++;
+    }
+
+    if (fila >= VGA_HEIGHT)
+        limpiar_pantalla();
+}
+
+void imprimir(const char *texto) {
+    while (*texto)
+        poner_caracter(*texto++);
+}
+
+/* Mapa basico de teclado PS/2, distribucion US */
+static const char mapa[128] = {
+    [0x02]='1', [0x03]='2', [0x04]='3',
+    [0x05]='4', [0x06]='5', [0x07]='6',
+    [0x08]='7', [0x09]='8', [0x0A]='9',
+    [0x0B]='0', [0x0C]='-', [0x0D]='=',
+    [0x10]='q', [0x11]='w', [0x12]='e',
+    [0x13]='r', [0x14]='t', [0x15]='y',
+    [0x16]='u', [0x17]='i', [0x18]='o',
+    [0x19]='p', [0x1E]='a', [0x1F]='s',
+    [0x20]='d', [0x21]='f', [0x22]='g',
+    [0x23]='h', [0x24]='j', [0x25]='k',
+    [0x26]='l', [0x2C]='z', [0x2D]='x',
+    [0x2E]='c', [0x2F]='v', [0x30]='b',
+    [0x31]='n', [0x32]='m', [0x39]=' '
+};
+
+void kernel_main(void) {
+    limpiar_pantalla();
+
+    color = 0x0A;
+    imprimir("==============================\n");
+    imprimir("MIOS - SISTEMA OPERATIVO v0.3\n");
+    imprimir("==============================\n\n");
+
+    color = 0x0F;
+    imprimir("Kernel: MiOS\n");
+
+    color = 0x0A;
+    imprimir("Teclado: ACTIVADO\n\n");
+
+    color = 0x0F;
+    imprimir("Escribe algo y presiona ENTER.\n\n");
+
+    color = 0x0A;
+    imprimir("MiOS> ");
+
+    char entrada[128];
+    size_t longitud = 0;
+
+    /* Sondeo del controlador PS/2 */
+    while (1) {
+        if (!(inb(0x64) & 1))
+            continue;
+
+        uint8_t codigo = inb(0x60);
+
+        /* Ignorar respuestas extendidas y liberaciones */
+        if (codigo == 0xE0 || codigo == 0xE1)
+            continue;
+
+        if (codigo & 0x80)
+            continue;
+
+        if (codigo == 0x1C) {
+            entrada[longitud] = '\0';
+
+            color = 0x0F;
+            imprimir("\nEscribiste: ");
+            imprimir(entrada);
+            imprimir("\n");
+
+            longitud = 0;
+            color = 0x0A;
+            imprimir("MiOS> ");
+        }
+        else if (codigo == 0x0E) {
+            if (longitud > 0) {
+                longitud--;
+                poner_caracter('\b');
+            }
+        }
+        else if (codigo < 128 && mapa[codigo]) {
+            if (longitud < sizeof(entrada) - 1) {
+                char c = mapa[codigo];
+                entrada[longitud++] = c;
+                poner_caracter(c);
+            }
+        }
+    }
+}

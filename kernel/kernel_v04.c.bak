@@ -1,0 +1,254 @@
+#include <stdint.h>
+#include <stddef.h>
+
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
+#define BUFFER_SIZE 128
+
+static volatile uint16_t *const VGA =
+    (volatile uint16_t *)0xB8000;
+
+static size_t fila = 0;
+static size_t columna = 0;
+static uint8_t color = 0x0F;
+
+static inline uint8_t inb(uint16_t puerto) {
+    uint8_t valor;
+    __asm__ volatile ("inb %1, %0"
+        : "=a"(valor) : "Nd"(puerto));
+    return valor;
+}
+
+static inline void outb(uint16_t puerto, uint8_t valor) {
+    __asm__ volatile ("outb %0, %1"
+        : : "a"(valor), "Nd"(puerto));
+}
+
+void limpiar_pantalla(void) {
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
+        VGA[i] = ((uint16_t)color << 8) | ' ';
+
+    fila = 0;
+    columna = 0;
+}
+
+void desplazar_pantalla(void) {
+    for (size_t y = 1; y < VGA_HEIGHT; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++)
+            VGA[(y - 1) * VGA_WIDTH + x] =
+                VGA[y * VGA_WIDTH + x];
+    }
+
+    for (size_t x = 0; x < VGA_WIDTH; x++)
+        VGA[(VGA_HEIGHT - 1) * VGA_WIDTH + x] =
+            ((uint16_t)color << 8) | ' ';
+
+    fila = VGA_HEIGHT - 1;
+}
+
+void poner_caracter(char c) {
+    if (c == '\n') {
+        columna = 0;
+        fila++;
+    } else if (c == '\b') {
+        if (columna > 0) {
+            columna--;
+        } else if (fila > 0) {
+            fila--;
+            columna = VGA_WIDTH - 1;
+        } else {
+            return;
+        }
+
+        VGA[fila * VGA_WIDTH + columna] =
+            ((uint16_t)color << 8) | ' ';
+    } else {
+        if (columna >= VGA_WIDTH) {
+            columna = 0;
+            fila++;
+        }
+
+        if (fila >= VGA_HEIGHT)
+            desplazar_pantalla();
+
+        VGA[fila * VGA_WIDTH + columna] =
+            ((uint16_t)color << 8) | (uint8_t)c;
+        columna++;
+    }
+
+    if (fila >= VGA_HEIGHT)
+        desplazar_pantalla();
+}
+
+void imprimir(const char *texto) {
+    while (*texto)
+        poner_caracter(*texto++);
+}
+
+int iguales(const char *a, const char *b) {
+    while (*a && *b) {
+        if (*a != *b)
+            return 0;
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+int empieza_con(const char *texto, const char *prefijo) {
+    while (*prefijo) {
+        if (*texto != *prefijo)
+            return 0;
+        texto++;
+        prefijo++;
+    }
+    return 1;
+}
+
+void mostrar_prompt(void) {
+    color = 0x0A;
+    imprimir("MiOS> ");
+}
+
+void reiniciar(void) {
+    imprimir("\nReiniciando MiOS...\n");
+
+    __asm__ volatile ("cli");
+
+    /* Esperar a que el controlador PS/2 este disponible */
+    for (unsigned int i = 0; i < 1000000; i++) {
+        if (!(inb(0x64) & 2)) {
+            outb(0x64, 0xFE);
+            break;
+        }
+    }
+
+    while (1)
+        __asm__ volatile ("hlt");
+}
+
+void ejecutar_comando(const char *cmd) {
+    color = 0x0F;
+
+    if (iguales(cmd, "")) {
+        return;
+    }
+    else if (iguales(cmd, "help")) {
+        imprimir("\nComandos disponibles:\n");
+        imprimir(" help    - Mostrar ayuda\n");
+        imprimir(" clear   - Limpiar pantalla\n");
+        imprimir(" about   - Informacion del sistema\n");
+        imprimir(" echo    - Repetir texto\n");
+        imprimir(" version - Mostrar version\n");
+        imprimir(" reboot  - Reiniciar MiOS\n");
+    }
+    else if (iguales(cmd, "clear")) {
+        limpiar_pantalla();
+    }
+    else if (iguales(cmd, "about")) {
+        imprimir("\nMiOS es un sistema operativo\n");
+        imprimir("experimental creado desde cero.\n");
+        imprimir("Arquitectura: x86 32 bits\n");
+        imprimir("Lenguajes: C y Assembly\n");
+    }
+    else if (iguales(cmd, "version")) {
+        imprimir("\nMiOS version 0.4\n");
+    }
+    else if (iguales(cmd, "echo")) {
+        imprimir("\n");
+    }
+    else if (empieza_con(cmd, "echo ")) {
+        imprimir("\n");
+        imprimir(cmd + 5);
+        imprimir("\n");
+    }
+    else if (iguales(cmd, "reboot")) {
+        reiniciar();
+    }
+    else {
+        color = 0x0C;
+        imprimir("\nComando no reconocido: ");
+        imprimir(cmd);
+        imprimir("\nEscribe help para ver los comandos.\n");
+    }
+}
+
+static const char mapa[128] = {
+    [0x02]='1', [0x03]='2', [0x04]='3',
+    [0x05]='4', [0x06]='5', [0x07]='6',
+    [0x08]='7', [0x09]='8', [0x0A]='9',
+    [0x0B]='0', [0x0C]='-', [0x0D]='=',
+    [0x10]='q', [0x11]='w', [0x12]='e',
+    [0x13]='r', [0x14]='t', [0x15]='y',
+    [0x16]='u', [0x17]='i', [0x18]='o',
+    [0x19]='p', [0x1E]='a', [0x1F]='s',
+    [0x20]='d', [0x21]='f', [0x22]='g',
+    [0x23]='h', [0x24]='j', [0x25]='k',
+    [0x26]='l', [0x2C]='z', [0x2D]='x',
+    [0x2E]='c', [0x2F]='v', [0x30]='b',
+    [0x31]='n', [0x32]='m', [0x39]=' '
+};
+
+void kernel_main(void) {
+    color = 0x0F;
+    limpiar_pantalla();
+
+    color = 0x0A;
+    imprimir("==============================\n");
+    imprimir("MIOS - SISTEMA OPERATIVO v0.4\n");
+    imprimir("==============================\n\n");
+
+    color = 0x0F;
+    imprimir("Kernel iniciado correctamente.\n");
+    imprimir("Terminal: ACTIVADA\n");
+    imprimir("Escribe help para comenzar.\n\n");
+
+    mostrar_prompt();
+
+    char entrada[BUFFER_SIZE];
+    size_t longitud = 0;
+    int extendido = 0;
+
+    while (1) {
+        if (!(inb(0x64) & 1))
+            continue;
+
+        uint8_t codigo = inb(0x60);
+
+        if (codigo == 0xE0 || codigo == 0xE1) {
+            extendido = 1;
+            continue;
+        }
+
+        if (extendido) {
+            extendido = 0;
+            continue;
+        }
+
+        if (codigo & 0x80)
+            continue;
+
+        if (codigo == 0x1C) {
+            entrada[longitud] = '\0';
+            poner_caracter('\n');
+
+            ejecutar_comando(entrada);
+
+            longitud = 0;
+            mostrar_prompt();
+        }
+        else if (codigo == 0x0E) {
+            if (longitud > 0) {
+                longitud--;
+                poner_caracter('\b');
+            }
+        }
+        else if (codigo < 128 && mapa[codigo]) {
+            if (longitud < BUFFER_SIZE - 1) {
+                char c = mapa[codigo];
+                entrada[longitud++] = c;
+                poner_caracter(c);
+            }
+        }
+    }
+}

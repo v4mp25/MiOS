@@ -1,0 +1,297 @@
+#include <stdint.h>
+#include <stddef.h>
+#include "fs.h"
+#include "ata.h"
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
+#define BUFFER_SIZE 128
+#define OUTPUT_SIZE 4096
+#define PATH_SIZE 128
+
+static volatile uint16_t *const VGA = (volatile uint16_t *)0xB8000;
+static size_t fila = 0, columna = 0;
+static uint8_t color = 0x0F;
+static uint16_t cwd = 0;
+
+static inline uint8_t inb(uint16_t port) {
+    uint8_t value;
+    __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
+    return value;
+}
+static inline void outb(uint16_t port, uint8_t value) {
+    __asm__ volatile ("outb %0, %1" : : "a"(value), "Nd"(port));
+}
+static int iguales(const char *a, const char *b) {
+    while (*a && *b) { if (*a++ != *b++) return 0; }
+    return *a == *b;
+}
+
+static void limpiar_pantalla(void) {
+    for (size_t i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++)
+        VGA[i] = ((uint16_t)color << 8) | ' ';
+    fila = columna = 0;
+}
+static void desplazar_pantalla(void) {
+    for (size_t y = 1; y < VGA_HEIGHT; y++)
+        for (size_t x = 0; x < VGA_WIDTH; x++)
+            VGA[(y - 1) * VGA_WIDTH + x] = VGA[y * VGA_WIDTH + x];
+    for (size_t x = 0; x < VGA_WIDTH; x++)
+        VGA[(VGA_HEIGHT - 1) * VGA_WIDTH + x] = ((uint16_t)color << 8) | ' ';
+    fila = VGA_HEIGHT - 1;
+}
+static void poner_caracter(char c) {
+    if (c == '\n') { columna = 0; fila++; }
+    else if (c == '\b') {
+        if (columna > 0) columna--;
+        else if (fila > 0) { fila--; columna = VGA_WIDTH - 1; }
+        else return;
+        VGA[fila * VGA_WIDTH + columna] = ((uint16_t)color << 8) | ' ';
+    } else {
+        if (columna >= VGA_WIDTH) { columna = 0; fila++; }
+        if (fila >= VGA_HEIGHT) desplazar_pantalla();
+        VGA[fila * VGA_WIDTH + columna] = ((uint16_t)color << 8) | (uint8_t)c;
+        columna++;
+    }
+    if (fila >= VGA_HEIGHT) desplazar_pantalla();
+}
+static void imprimir(const char *s) { while (*s) poner_caracter(*s++); }
+
+static void error_fs(int result) {
+    color = 0x0C;
+    switch (result) {
+        case MIOS_FS_NOT_FOUND: imprimir("Error: ruta no encontrada.\n"); break;
+        case MIOS_FS_EXISTS: imprimir("Error: el elemento ya existe.\n"); break;
+        case MIOS_FS_NOT_DIR: imprimir("Error: no es un directorio.\n"); break;
+        case MIOS_FS_IS_DIR: imprimir("Error: es un directorio.\n"); break;
+        case MIOS_FS_FULL: imprimir("Error: sistema de archivos lleno.\n"); break;
+        case MIOS_FS_BUFFER: imprimir("Error: contenido demasiado grande.\n"); break;
+        default: imprimir("Error: ruta no valida.\n"); break;
+    }
+    color = 0x0F;
+}
+static void mostrar_prompt(void) {
+    char path[PATH_SIZE];
+    color = 0x0A;
+    if (mios_fs_pwd(cwd, path, sizeof(path)) == MIOS_FS_OK) {
+        imprimir("MiOS:"); imprimir(path); imprimir("> ");
+    } else imprimir("MiOS> ");
+    color = 0x0F;
+}
+static void reiniciar(void) {
+    imprimir("\nEl reinicio por software aun no esta disponible.\n");
+    imprimir("Cierra QEMU y vuelve a ejecutar MiOS.\n");
+}
+static void probar_disco(void) {
+    uint8_t escritura[ATA_SECTOR_SIZE];
+    uint8_t lectura[ATA_SECTOR_SIZE];
+
+    /* Sector reservado para esta prueba del disco virtual. */
+    const uint32_t sector = 100;
+
+    imprimir("Probando escritura ATA...\n");
+
+    /* Generar un patron de prueba reproducible. */
+    for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) {
+        escritura[i] = (uint8_t)((i * 37U + 11U) & 0xFF);
+    }
+
+    if (ata_write_sector(sector, escritura) != 0) {
+        imprimir("ERROR: no se pudo escribir el sector.\n");
+        return;
+    }
+
+    imprimir("Escritura correcta. Leyendo sector...\n");
+
+    if (ata_read_sector(sector, lectura) != 0) {
+        imprimir("ERROR: no se pudo leer el sector.\n");
+        return;
+    }
+
+    for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) {
+        if (lectura[i] != escritura[i]) {
+            imprimir("ERROR: los datos no coinciden.\n");
+            return;
+        }
+    }
+
+    imprimir("EXITO: lectura y escritura ATA correctas.\n");
+}
+static void comprobar_disco(void) {
+    uint8_t lectura[ATA_SECTOR_SIZE];
+
+    imprimir("Comprobando datos guardados...\n");
+
+    if (ata_read_sector(100, lectura) != 0) {
+        imprimir("ERROR: no se pudo leer el sector.\n");
+        return;
+    }
+
+    for (uint32_t i = 0; i < ATA_SECTOR_SIZE; i++) {
+        uint8_t esperado = (uint8_t)((i * 37U + 11U) & 0xFF);
+
+        if (lectura[i] != esperado) {
+            imprimir("ERROR: los datos no coinciden.\n");
+            return;
+        }
+    }
+
+    imprimir("EXITO: los datos siguen en el disco.\n");
+}
+static void ejecutar_comando(char *linea) {
+    char *args = linea;
+    while (*args && *args != ' ') args++;
+    if (*args) { *args++ = '\0'; while (*args == ' ') args++; }
+
+    char salida[OUTPUT_SIZE];
+    char path[PATH_SIZE];
+    int result;
+
+    if (iguales(linea, "")) return;
+    else if (iguales(linea, "help")) {
+        imprimir("Comandos de MiOS:\n");
+        imprimir("help, clear, about, version, echo TEXTO\n");
+        imprimir("pwd, cd RUTA, ls [RUTA], mkdir RUTA\n");
+        imprimir("touch RUTA, cat RUTA, write RUTA TEXTO, reboot\n");
+    } else if (iguales(linea, "clear")) limpiar_pantalla();
+    else if (iguales(linea, "about")) {
+        imprimir("MiOS: sistema operativo educativo.\n");
+        imprimir("Arquitectura: x86 de 32 bits.\nSistema de archivos: RAM.\n");
+    } else if (iguales(linea, "version")) imprimir("MiOS version 0.5\n");
+    else if (iguales(linea, "echo")) { imprimir(args); imprimir("\n"); }
+    else if (iguales(linea, "pwd")) {
+        result = mios_fs_pwd(cwd, path, sizeof(path));
+        if (result == MIOS_FS_OK) { imprimir(path); imprimir("\n"); }
+        else error_fs(result);
+    } else if (iguales(linea, "cd")) {
+        if (!args[0]) cwd = 0;
+        else { result = mios_fs_cd(cwd, args); if (result >= 0) cwd = (uint16_t)result; else error_fs(result); }
+    } else if (iguales(linea, "ls")) {
+        result = mios_fs_ls(cwd, args[0] ? args : ".", salida, sizeof(salida));
+        if (result == MIOS_FS_OK) { if (salida[0]) imprimir(salida); else imprimir("(directorio vacio)\n"); }
+        else error_fs(result);
+    } else if (iguales(linea, "mkdir")) {
+        if (!args[0]) imprimir("Uso: mkdir RUTA\n");
+        else { result = mios_fs_mkdir(cwd, args); if (result == MIOS_FS_OK) imprimir("Directorio creado.\n"); else error_fs(result); }
+    } else if (iguales(linea, "touch")) {
+        if (!args[0]) imprimir("Uso: touch RUTA\n");
+        else { result = mios_fs_touch(cwd, args); if (result == MIOS_FS_OK) imprimir("Archivo creado.\n"); else error_fs(result); }
+    } else if (iguales(linea, "cat")) {
+        if (!args[0]) imprimir("Uso: cat RUTA\n");
+        else { result = mios_fs_cat(cwd, args, salida, sizeof(salida)); if (result == MIOS_FS_OK) { imprimir(salida); imprimir("\n"); } else error_fs(result); }
+    } else if (iguales(linea, "write")) {
+        char *texto = args;
+        while (*texto && *texto != ' ') texto++;
+        if (!args[0] || !*texto) imprimir("Uso: write RUTA TEXTO\n");
+        else {
+            *texto++ = '\0'; while (*texto == ' ') texto++;
+            result = mios_fs_write(cwd, args, texto);
+            if (result == MIOS_FS_OK) imprimir("Archivo guardado en RAM.\n"); else error_fs(result);
+        }
+    } else if (iguales(linea, "reboot")) reiniciar();
+    else if (iguales(linea, "disktest")) {
+    probar_disco();
+}
+else if (iguales(linea, "diskreadtest")) {
+    comprobar_disco();
+}
+    else {
+        color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
+        imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
+    }
+}
+
+/* Scancode set 1: mapa base tipo US. */
+static const char mapa_normal[128] = {
+    [0x02]='1', [0x03]='2', [0x04]='3', [0x05]='4', [0x06]='5',
+    [0x07]='6', [0x08]='7', [0x09]='8', [0x0A]='9', [0x0B]='0',
+    [0x0C]='-', [0x0D]='=',
+    [0x10]='q', [0x11]='w', [0x12]='e', [0x13]='r', [0x14]='t',
+    [0x15]='y', [0x16]='u', [0x17]='i', [0x18]='o', [0x19]='p',
+    [0x1A]='[', [0x1B]=']',
+    [0x1E]='a', [0x1F]='s', [0x20]='d', [0x21]='f', [0x22]='g',
+    [0x23]='h', [0x24]='j', [0x25]='k', [0x26]='l',
+    [0x27]=';', [0x28]='\'', [0x29]='`', [0x2B]='\\',
+    [0x2C]='z', [0x2D]='x', [0x2E]='c', [0x2F]='v', [0x30]='b',
+    [0x31]='n', [0x32]='m', [0x33]=',', [0x34]='.', [0x35]='/',
+    [0x39]=' ', [0x56]='<'
+};
+
+static const char mapa_shift[128] = {
+    [0x02]='!', [0x03]='@', [0x04]='#', [0x05]='$', [0x06]='%',
+    [0x07]='^', [0x08]='&', [0x09]='*', [0x0A]='(', [0x0B]=')',
+    [0x0C]='_', [0x0D]='+',
+    [0x1A]='{', [0x1B]='}',
+    [0x27]=':', [0x28]='"', [0x29]='~', [0x2B]='|',
+    [0x33]='<', [0x34]='>', [0x35]='?', [0x56]='>'
+};
+
+static char traducir_tecla(uint8_t codigo, int shift, int caps) {
+    if (codigo >= 128) return 0;
+    char c = mapa_normal[codigo];
+    if (!c) return 0;
+
+    if (c >= 'a' && c <= 'z') {
+        if (shift ^ caps) c = (char)(c - 'a' + 'A');
+    } else if (shift && mapa_shift[codigo]) {
+        c = mapa_shift[codigo];
+    }
+    return c;
+}
+
+void kernel_main(void) {
+    mios_fs_init();
+    color = 0x0F;
+    limpiar_pantalla();
+
+    color = 0x0A;
+    imprimir("================================\n");
+    imprimir("MIOS - SISTEMA OPERATIVO v0.5\n");
+    imprimir("================================\n\n");
+
+    color = 0x0F;
+    imprimir("Sistema de archivos: RAM\n");
+    imprimir("Escribe help para ver los comandos.\n\n");
+
+    char entrada[BUFFER_SIZE];
+    size_t longitud = 0;
+    int shift = 0;
+    int caps = 0;
+    int extendido = 0;
+    int ignorar_pausa = 0;
+
+    mostrar_prompt();
+
+    while (1) {
+        if (!(inb(0x64) & 1)) continue;
+        uint8_t codigo = inb(0x60);
+
+        if (ignorar_pausa) { ignorar_pausa--; continue; }
+        if (codigo == 0xE1) { ignorar_pausa = 5; continue; }
+        if (codigo == 0xE0) { extendido = 1; continue; }
+        if (extendido) { extendido = 0; continue; }
+
+        if (codigo == 0x2A || codigo == 0x36) { shift = 1; continue; }
+        if (codigo == 0xAA || codigo == 0xB6) { shift = 0; continue; }
+        if (codigo == 0x3A) { caps = !caps; continue; }
+        if (codigo & 0x80) continue;
+
+        if (codigo == 0x1C) {
+            entrada[longitud] = '\0';
+            poner_caracter('\n');
+            ejecutar_comando(entrada);
+            longitud = 0;
+            mostrar_prompt();
+        } else if (codigo == 0x0E) {
+            if (longitud > 0) {
+                longitud--;
+                poner_caracter('\b');
+            }
+        } else {
+            char c = traducir_tecla(codigo, shift, caps);
+            if (c && longitud < BUFFER_SIZE - 1) {
+                entrada[longitud++] = c;
+                poner_caracter(c);
+            }
+        }
+    }
+}

@@ -1,0 +1,81 @@
+#include <stdint.h>
+#include <stddef.h>
+
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
+
+static volatile uint16_t *const VGA =
+    (volatile uint16_t *)0xB8000;
+
+static uint8_t color = 0x0F;
+static size_t fila = 0;
+static size_t columna = 0;
+
+void limpiar_pantalla(void) {
+    for (size_t y = 0; y < VGA_HEIGHT; y++) {
+        for (size_t x = 0; x < VGA_WIDTH; x++) {
+            VGA[y * VGA_WIDTH + x] =
+                ((uint16_t)color << 8) | ' ';
+        }
+    }
+
+    fila = 0;
+    columna = 0;
+}
+
+void establecer_color(uint8_t nuevo_color) {
+    color = nuevo_color;
+}
+
+void imprimir(const char *texto) {
+    for (size_t i = 0; texto[i] != '\0'; i++) {
+        if (texto[i] == '\n') {
+            columna = 0;
+            fila++;
+            continue;
+        }
+
+        if (columna >= VGA_WIDTH) {
+            columna = 0;
+            fila++;
+        }
+
+        if (fila >= VGA_HEIGHT) {
+            break;
+        }
+
+        VGA[fila * VGA_WIDTH + columna] =
+            ((uint16_t)color << 8) | texto[i];
+
+        columna++;
+    }
+}
+
+void kernel_main(void) {
+    establecer_color(0x0F);
+    limpiar_pantalla();
+
+    establecer_color(0x0A);
+    imprimir("================================\n");
+    imprimir("MIOS - SISTEMA OPERATIVO v0.2\n");
+    imprimir("================================\n\n");
+
+    establecer_color(0x0F);
+    imprimir("Kernel: MiOS\n");
+    imprimir("Arquitectura: x86 32 bits\n");
+
+    establecer_color(0x0A);
+    imprimir("Estado: INICIADO CORRECTAMENTE\n\n");
+
+    establecer_color(0x0F);
+    imprimir("Bienvenido a tu sistema operativo.\n\n");
+
+    establecer_color(0x0A);
+    imprimir("MiOS> ");
+
+    __asm__ volatile ("cli");
+
+    while (1) {
+        __asm__ volatile ("hlt");
+    }
+}

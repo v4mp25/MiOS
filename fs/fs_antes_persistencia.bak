@@ -1,0 +1,324 @@
+#include "fs.h"
+
+#define MAX_NODES 64
+#define NAME_SIZE 32
+#define CONTENT_SIZE 256
+#define PATH_SIZE 128
+
+typedef struct {
+    int used;
+    int is_dir;
+    int parent;
+    char name[NAME_SIZE];
+    char content[CONTENT_SIZE];
+} FsNode;
+
+static FsNode nodes[MAX_NODES];
+
+static size_t str_len(const char *s) {
+    size_t n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
+static int copy_text(char *dst, const char *src, size_t cap) {
+    size_t i = 0;
+
+    while (src[i]) {
+        if (i + 1 >= cap) return MIOS_FS_BUFFER;
+        dst[i] = src[i];
+        i++;
+    }
+
+    dst[i] = '\0';
+    return MIOS_FS_OK;
+}
+
+static int append_text(char *out, size_t cap,
+                       size_t *used, const char *s) {
+    size_t n = str_len(s);
+
+    if (*used + n >= cap)
+        return MIOS_FS_BUFFER;
+
+    for (size_t i = 0; i < n; i++)
+        out[(*used)++] = s[i];
+
+    out[*used] = '\0';
+    return MIOS_FS_OK;
+}
+
+static int find_child(int parent, const char *name, size_t len) {
+    for (int i = 1; i < MAX_NODES; i++) {
+        if (!nodes[i].used || nodes[i].parent != parent)
+            continue;
+
+        size_t n = str_len(nodes[i].name);
+
+        if (n != len) continue;
+
+        size_t j = 0;
+        while (j < len && nodes[i].name[j] == name[j])
+            j++;
+
+        if (j == len) return i;
+    }
+
+    return MIOS_FS_NOT_FOUND;
+}
+
+void mios_fs_init(void) {
+    for (int i = 0; i < MAX_NODES; i++) {
+        nodes[i].used = 0;
+        nodes[i].is_dir = 0;
+        nodes[i].parent = 0;
+        nodes[i].name[0] = '\0';
+        nodes[i].content[0] = '\0';
+    }
+
+    nodes[0].used = 1;
+    nodes[0].is_dir = 1;
+    nodes[0].parent = 0;
+    nodes[0].name[0] = '\0';
+}
+
+/* Resuelve rutas absolutas y relativas. */
+static int resolve(uint16_t cwd, const char *path) {
+    if (cwd >= MAX_NODES || !nodes[cwd].used)
+        return MIOS_FS_BAD_PATH;
+
+    if (!path || !path[0])
+        return cwd;
+
+    int current = (path[0] == '/') ? 0 : (int)cwd;
+    size_t i = 0;
+
+    while (path[i]) {
+        while (path[i] == '/') i++;
+        if (!path[i]) break;
+
+        size_t start = i;
+        while (path[i] && path[i] != '/') i++;
+        size_t len = i - start;
+
+        if (len == 1 && path[start] == '.')
+            continue;
+
+        if (len == 2 && path[start] == '.' &&
+            path[start + 1] == '.') {
+            current = nodes[current].parent;
+            continue;
+        }
+
+        if (!nodes[current].is_dir)
+            return MIOS_FS_NOT_DIR;
+
+        int child = find_child(current, path + start, len);
+
+        if (child < 0)
+            return child;
+
+        current = child;
+    }
+
+    return current;
+}
+
+/* Separa una ruta en directorio padre y nombre final. */
+static int split_path(uint16_t cwd, const char *path,
+                      int *parent, char *name) {
+    if (!path || !path[0] || str_len(path) >= PATH_SIZE)
+        return MIOS_FS_BAD_PATH;
+
+    char temp[PATH_SIZE];
+
+    if (copy_text(temp, path, sizeof(temp)) < 0)
+        return MIOS_FS_BAD_PATH;
+
+    size_t len = str_len(temp);
+
+    while (len > 1 && temp[len - 1] == '/')
+        temp[--len] = '\0';
+
+    if (len == 1 && temp[0] == '/')
+        return MIOS_FS_BAD_PATH;
+
+    size_t slash = len;
+
+    while (slash > 0 && temp[slash - 1] != '/')
+        slash--;
+
+    char *base = temp + slash;
+
+    if (!base[0] ||
+        (base[0] == '.' && base[1] == '\0') ||
+        (base[0] == '.' && base[1] == '.' &&
+         base[2] == '\0'))
+        return MIOS_FS_BAD_PATH;
+
+    if (str_len(base) >= NAME_SIZE)
+        return MIOS_FS_BAD_PATH;
+
+    if (slash == 0) {
+        *parent = cwd;
+    } else if (slash == 1) {
+        *parent = 0;
+    } else {
+        temp[slash - 1] = '\0';
+        *parent = resolve(cwd, temp);
+
+        if (*parent < 0) return *parent;
+    }
+
+    if (!nodes[*parent].is_dir)
+        return MIOS_FS_NOT_DIR;
+
+    return copy_text(name, base, NAME_SIZE);
+}
+
+static int create_node(uint16_t cwd, const char *path, int is_dir) {
+    int parent;
+    char name[NAME_SIZE];
+
+    int result = split_path(cwd, path, &parent, name);
+    if (result < 0) return result;
+
+    if (find_child(parent, name, str_len(name)) >= 0)
+        return MIOS_FS_EXISTS;
+
+    int slot = -1;
+
+    for (int i = 1; i < MAX_NODES; i++) {
+        if (!nodes[i].used) {
+            slot = i;
+            break;
+        }
+    }
+
+    if (slot < 0) return MIOS_FS_FULL;
+
+    nodes[slot].used = 1;
+    nodes[slot].is_dir = is_dir;
+    nodes[slot].parent = parent;
+
+    copy_text(nodes[slot].name, name, NAME_SIZE);
+    nodes[slot].content[0] = '\0';
+
+    return MIOS_FS_OK;
+}
+
+int mios_fs_cd(uint16_t cwd, const char *path) {
+    int node = resolve(cwd, path);
+
+    if (node < 0) return node;
+    if (!nodes[node].is_dir) return MIOS_FS_NOT_DIR;
+
+    return node;
+}
+
+int mios_fs_pwd(uint16_t cwd, char *out, size_t cap) {
+    if (cwd >= MAX_NODES || !nodes[cwd].used)
+        return MIOS_FS_BAD_PATH;
+
+    if (cap < 2) return MIOS_FS_BUFFER;
+
+    int ancestors[MAX_NODES];
+    size_t count = 0;
+    int current = cwd;
+
+    while (current != 0 && count < MAX_NODES) {
+        ancestors[count++] = current;
+        current = nodes[current].parent;
+    }
+
+    if (current != 0) return MIOS_FS_BAD_PATH;
+
+    size_t used = 0;
+    out[0] = '\0';
+
+    int result = append_text(out, cap, &used, "/");
+    if (result < 0) return result;
+
+    for (size_t i = count; i > 0; i--) {
+        result = append_text(
+            out, cap, &used, nodes[ancestors[i - 1]].name
+        );
+        if (result < 0) return result;
+
+        if (i > 1) {
+            result = append_text(out, cap, &used, "/");
+            if (result < 0) return result;
+        }
+    }
+
+    return MIOS_FS_OK;
+}
+
+int mios_fs_ls(uint16_t cwd, const char *path,
+               char *out, size_t cap) {
+    int dir = resolve(cwd, path);
+
+    if (dir < 0) return dir;
+    if (!nodes[dir].is_dir) return MIOS_FS_NOT_DIR;
+    if (cap == 0) return MIOS_FS_BUFFER;
+
+    size_t used = 0;
+    out[0] = '\0';
+
+    for (int i = 1; i < MAX_NODES; i++) {
+        if (!nodes[i].used || nodes[i].parent != dir)
+            continue;
+
+        int result = append_text(
+            out, cap, &used, nodes[i].name
+        );
+        if (result < 0) return result;
+
+        if (nodes[i].is_dir) {
+            result = append_text(out, cap, &used, "/");
+            if (result < 0) return result;
+        }
+
+        result = append_text(out, cap, &used, "\n");
+        if (result < 0) return result;
+    }
+
+    return MIOS_FS_OK;
+}
+
+int mios_fs_mkdir(uint16_t cwd, const char *path) {
+    return create_node(cwd, path, 1);
+}
+
+int mios_fs_touch(uint16_t cwd, const char *path) {
+    return create_node(cwd, path, 0);
+}
+
+int mios_fs_cat(uint16_t cwd, const char *path,
+                char *out, size_t cap) {
+    int node = resolve(cwd, path);
+
+    if (node < 0) return node;
+    if (nodes[node].is_dir) return MIOS_FS_IS_DIR;
+
+    return copy_text(out, nodes[node].content, cap);
+}
+
+int mios_fs_write(uint16_t cwd, const char *path,
+                  const char *text) {
+    int node = resolve(cwd, path);
+
+    if (node == MIOS_FS_NOT_FOUND) {
+        int result = mios_fs_touch(cwd, path);
+        if (result < 0) return result;
+
+        node = resolve(cwd, path);
+    }
+
+    if (node < 0) return node;
+    if (nodes[node].is_dir) return MIOS_FS_IS_DIR;
+
+    return copy_text(
+        nodes[node].content, text, CONTENT_SIZE
+    );
+}
