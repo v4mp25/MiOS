@@ -21,6 +21,7 @@ typedef struct __attribute__((packed)) {
 static uint32_t region_count = 0;
 uint32_t mios_mmap_start = 0;
 uint32_t mios_mmap_length = 0;
+uint32_t mios_mbi_address = 0;
 static uint32_t usable_mib = 0;
 static int map_valid = 0;
 
@@ -33,6 +34,7 @@ void memory_map_init(
     usable_mib = 0;
     map_valid = 0;
      mios_mmap_start = 0;
+     mios_mbi_address = 0;
 mios_mmap_length = 0;
 
     if (magic != MULTIBOOT_MAGIC ||
@@ -99,6 +101,7 @@ mios_mmap_length = 0;
         usable_mib = (uint32_t)mib;
 mios_mmap_start = mbi->mmap_addr;
 mios_mmap_length = mbi->mmap_length;
+mios_mbi_address = mbi_address;
     map_valid = 1;
 
 }

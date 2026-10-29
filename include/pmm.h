@@ -17,5 +17,6 @@ uint32_t pmm_used_frames(void);
 /* Reserva y liberacion de marcos fisicos */
 int pmm_alloc_frame(uint32_t *address);
 int pmm_free_frame(uint32_t address);
-
+int pmm_is_reserved(uint32_t address);
+int pmm_validate(void);
 #endif

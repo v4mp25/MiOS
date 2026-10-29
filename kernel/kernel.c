@@ -244,6 +244,9 @@ else if (iguales(linea, "help")) {
     imprimir("bootinfo\n");
     imprimir("pmminfo, pmmtest\n");
     imprimir("pmmstress\n");
+    imprimir("pmmguard\n");
+    imprimir("pmmvalidate\n");
+    imprimir("bootrefs\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -748,6 +751,112 @@ else if (iguales(linea, "pmmstress")) {
     else
         imprimir("PMM STRESS: ERROR\n");
 }
+
+else if (iguales(linea, "pmmguard")) {
+    uint32_t inicio =
+        (uint32_t)(uintptr_t)__kernel_start;
+
+    uint32_t fin =
+        (uint32_t)(uintptr_t)__kernel_end;
+
+    imprimir("=== PROTECCION DEL KERNEL ===\n");
+
+    imprimir("Inicio: ");
+    imprimir_hex32(inicio);
+    imprimir("\n");
+
+    imprimir("Fin: ");
+    imprimir_hex32(fin);
+    imprimir("\n");
+
+    if (pmm_is_reserved(inicio) == 1 &&
+        fin > inicio &&
+        pmm_is_reserved(fin - 1U) == 1) {
+        imprimir("Kernel protegido: OK\n");
+    } else {
+        imprimir("ERROR: kernel no protegido.\n");
+    }
+
+    if (pmm_is_reserved(0x00009000U) == 1)
+        imprimir("Memoria baja protegida: OK\n");
+    else
+        imprimir("ERROR: memoria baja sin proteccion.\n");
+}
+
+else if (iguales(linea, "pmmvalidate")) {
+    imprimir("=== VALIDACION DEL PMM ===\n");
+
+    if (pmm_validate() == 0) {
+        imprimir("Bitmap: OK\n");
+        imprimir("Regiones reservadas: OK\n");
+        imprimir("Kernel protegido: OK\n");
+        imprimir("Contadores de memoria: OK\n");
+        imprimir("PMM VALIDATION: OK\n");
+    } else {
+        color = 0x0C;
+        imprimir("PMM VALIDATION: ERROR\n");
+        color = 0x0F;
+    }
+}
+
+else if (iguales(linea, "bootrefs")) {
+    imprimir("=== REFERENCIAS MULTIBOOT ===\n");
+
+    if (mbi_saved_address == 0 ||
+        !memory_map_available()) {
+        imprimir("Multiboot no disponible.\n");
+    } else {
+        const uint32_t *mbi =
+            (const uint32_t *)(uintptr_t)mbi_saved_address;
+
+        uint32_t flags = mbi[0];
+
+        imprimir("MBI principal: ");
+        imprimir_hex32(mbi_saved_address);
+        imprimir("\n");
+
+        imprimir("Mapa de memoria: ");
+        imprimir_hex32(mios_mmap_start);
+        imprimir("\n");
+
+        if (flags & (1U << 2)) {
+            imprimir("Linea de comandos: ");
+            imprimir_hex32(mbi[4]);
+            imprimir("\n");
+        }
+
+        if (flags & (1U << 5)) {
+            imprimir("Tabla ELF: ");
+            imprimir_hex32(mbi[9]);
+            imprimir("\n");
+
+            imprimir("Entradas ELF: ");
+            imprimir_numero(mbi[7]);
+            imprimir("\n");
+
+            imprimir("Tamano por entrada: ");
+            imprimir_numero(mbi[8]);
+            imprimir("\n");
+        }
+
+        if (flags & (1U << 9)) {
+            imprimir("Nombre de GRUB: ");
+            imprimir_hex32(mbi[16]);
+            imprimir("\n");
+        }
+
+        if (flags & (1U << 11)) {
+            imprimir("VBE control: ");
+            imprimir_hex32(mbi[18]);
+            imprimir("\n");
+
+            imprimir("VBE modo: ");
+            imprimir_hex32(mbi[19]);
+            imprimir("\n");
+        }
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
