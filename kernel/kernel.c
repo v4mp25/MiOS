@@ -217,6 +217,96 @@ static void imprimir_hex32(uint32_t numero) {
     }
 }
 
+/*
+ * MiOS - Prueba de concurrencia PMM.
+ *
+ * Dos hilos solicitan y liberan marcos.
+ * No llaman a thread_yield().
+ */
+
+#define PMM_CONCURRENT_LOOPS 16U
+
+static volatile uint32_t concurrent_live[2] = {0, 0};
+static volatile uint32_t concurrent_done[2] = {0, 0};
+static volatile uint32_t concurrent_errors = 0;
+static volatile uint32_t concurrent_overlap = 0;
+
+static void pmm_concurrent_worker(uint32_t id) {
+    uint32_t other = 1U - id;
+
+    for (uint32_t i = 0;
+         i < PMM_CONCURRENT_LOOPS;
+         i++) {
+
+        uint32_t frame = 0;
+
+        if (pmm_alloc_frame(&frame) != 0) {
+            concurrent_errors++;
+            return;
+        }
+
+        /*
+         * Publicar la reserva y comprobar
+         * que el otro hilo no tiene el
+         * mismo marco.
+         */
+        uint32_t flags = irq_save();
+
+        if (concurrent_live[other] == frame) {
+            concurrent_errors++;
+        }
+
+        concurrent_live[id] = frame;
+
+        if (concurrent_live[other] != 0) {
+            concurrent_overlap++;
+        }
+
+        irq_restore(flags);
+
+        /*
+         * Mantener el marco reservado
+         * durante 6 ticks.
+         *
+         * El PIT debe poder interrumpirnos.
+         */
+        uint32_t start = timer_get_ticks();
+
+        while ((uint32_t)(timer_get_ticks() - start) < 6U) {
+            __asm__ volatile ("" ::: "memory");
+        }
+
+        /*
+         * Retirar la reserva publicada
+         * y liberar el marco como una
+         * unica seccion critica.
+         */
+        flags = irq_save();
+
+        if (concurrent_live[id] != frame) {
+            concurrent_errors++;
+        }
+
+        concurrent_live[id] = 0;
+
+        if (pmm_free_frame(frame) != 0) {
+            concurrent_errors++;
+        }
+
+        irq_restore(flags);
+
+        concurrent_done[id]++;
+    }
+}
+
+static void pmm_concurrent_task1(void) {
+    pmm_concurrent_worker(0);
+}
+
+static void pmm_concurrent_task2(void) {
+    pmm_concurrent_worker(1);
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -259,6 +349,7 @@ else if (iguales(linea, "help")) {
     imprimir("vmmwritetest\n");
     imprimir("pmmownership\n");
     imprimir("irqtest\n");
+    imprimir("pmmconcurrent\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1386,6 +1477,64 @@ else if (iguales(linea, "irqtest")) {
     imprimir("Ticks despues: ");
     imprimir_numero(ticks_despues);
     imprimir("\n");
+}
+
+else if (iguales(linea, "pmmconcurrent")) {
+    imprimir("=== PRUEBA CONCURRENCIA PMM ===\n");
+
+    concurrent_live[0] = 0;
+    concurrent_live[1] = 0;
+    concurrent_done[0] = 0;
+    concurrent_done[1] = 0;
+    concurrent_errors = 0;
+    concurrent_overlap = 0;
+
+    uint32_t before = pmm_free_frames();
+
+    int a = thread_create(pmm_concurrent_task1);
+    int b = thread_create(pmm_concurrent_task2);
+
+    if (a < 0 || b < 0) {
+        imprimir("ERROR: no se pudieron crear hilos.\n");
+        /*
+         * No continuar con thread_run si
+         * falta uno de los dos hilos.
+         * La limpieza de creaciones parciales
+         * sera una mejora del administrador.
+         */
+    } else {
+        int run_result = thread_run();
+
+        imprimir("Operaciones hilo 1: ");
+        imprimir_numero(concurrent_done[0]);
+        imprimir("\n");
+
+        imprimir("Operaciones hilo 2: ");
+        imprimir_numero(concurrent_done[1]);
+        imprimir("\n");
+
+        imprimir("Coincidencias temporales: ");
+        imprimir_numero(concurrent_overlap);
+        imprimir("\n");
+
+        imprimir("Errores: ");
+        imprimir_numero(concurrent_errors);
+        imprimir("\n");
+
+        if (run_result == 0 &&
+            concurrent_done[0] == PMM_CONCURRENT_LOOPS &&
+            concurrent_done[1] == PMM_CONCURRENT_LOOPS &&
+            concurrent_errors == 0 &&
+            concurrent_overlap > 0 &&
+            concurrent_live[0] == 0 &&
+            concurrent_live[1] == 0 &&
+            pmm_free_frames() == before) {
+
+            imprimir("PMM CONCURRENT: OK\n");
+        } else {
+            imprimir("PMM CONCURRENT: ERROR\n");
+        }
+    }
 }
 
     else {
