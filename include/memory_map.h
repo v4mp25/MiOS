@@ -26,5 +26,5 @@ int memory_map_get_region(
     uint32_t index,
     MemoryRegionInfo *out
 );
-
+int memory_map_validate_boot(void);
 #endif

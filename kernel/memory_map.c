@@ -163,3 +163,170 @@ int memory_map_get_region(
 
     return -1;
 }
+
+/*
+ * Validacion conservadora de Multiboot 1.
+ *
+ * Comprueba que las estructuras conocidas
+ * permanezcan completamente dentro de
+ * los primeros 4 MiB reservados por MiOS.
+ */
+
+extern uint32_t mios_mbi_address;
+
+#define BOOT_SAFE_LIMIT 0x00400000U
+
+static int boot_range_safe(
+    uint32_t address,
+    uint64_t length
+) {
+    if (address == 0 || length == 0)
+        return 0;
+
+    if (address >= BOOT_SAFE_LIMIT)
+        return 0;
+
+    return length <=
+        (uint64_t)(BOOT_SAFE_LIMIT - address);
+}
+
+/* Comprobar una cadena terminada en cero */
+static int boot_string_safe(uint32_t address) {
+    if (!boot_range_safe(address, 1))
+        return 0;
+
+    const char *text =
+        (const char *)(uintptr_t)address;
+
+    uint32_t limit =
+        BOOT_SAFE_LIMIT - address;
+
+    /* Limite adicional contra cadenas corruptas */
+    if (limit > 4096U)
+        limit = 4096U;
+
+    for (uint32_t i = 0; i < limit; i++) {
+        if (text[i] == '\0')
+            return 1;
+    }
+
+    return 0;
+}
+
+int memory_map_validate_boot(void) {
+    if (!memory_map_available())
+        return -1;
+
+    /*
+     * Multiboot 1: estructura principal.
+     * Reservamos el rango de los campos
+     * estandar hasta la informacion framebuffer.
+     */
+    if (!boot_range_safe(mios_mbi_address, 116U))
+        return -1;
+
+    const uint32_t *mbi =
+        (const uint32_t *)(uintptr_t)mios_mbi_address;
+
+    uint32_t flags = mbi[0];
+
+    /* El mapa debe estar presente */
+    if (!(flags & (1U << 6)))
+        return -1;
+
+    if (!boot_range_safe(
+            mios_mmap_start,
+            mios_mmap_length))
+        return -1;
+
+    /* Cadena de comandos */
+    if (flags & (1U << 2)) {
+        if (!boot_string_safe(mbi[4]))
+            return -1;
+    }
+
+    /* Modulos: no admitidos en esta etapa */
+    if (flags & (1U << 3)) {
+        if (mbi[5] != 0)
+            return -1;
+    }
+
+    /* Tablas a.out y ELF son alternativas */
+    if ((flags & (1U << 4)) &&
+        (flags & (1U << 5)))
+        return -1;
+
+    /* Simbolos a.out */
+    if (flags & (1U << 4)) {
+        uint64_t bytes =
+            (uint64_t)mbi[7] + mbi[8];
+
+        if (bytes != 0 &&
+            !boot_range_safe(mbi[9], bytes))
+            return -1;
+    }
+
+    /* Tabla de secciones ELF */
+    if (flags & (1U << 5)) {
+        uint32_t count = mbi[7];
+        uint32_t size = mbi[8];
+        uint32_t address = mbi[9];
+
+        if (count != 0) {
+            if (size == 0)
+                return -1;
+
+            uint64_t bytes =
+                (uint64_t)count * size;
+
+            if (!boot_range_safe(address, bytes))
+                return -1;
+        }
+    }
+
+    /* Informacion de unidades */
+    if (flags & (1U << 7)) {
+        if (mbi[13] != 0 &&
+            !boot_range_safe(mbi[14], mbi[13]))
+            return -1;
+    }
+
+    /* Tabla de configuracion ROM */
+    if (flags & (1U << 8)) {
+        if (!boot_range_safe(mbi[15], 1))
+            return -1;
+    }
+
+    /* Nombre del cargador */
+    if (flags & (1U << 9)) {
+        if (!boot_string_safe(mbi[16]))
+            return -1;
+    }
+
+    /* Estructura APM */
+    if (flags & (1U << 10)) {
+        if (!boot_range_safe(mbi[17], 20U))
+            return -1;
+    }
+
+    /* Estructuras de informacion VBE */
+    if (flags & (1U << 11)) {
+        if (!boot_range_safe(mbi[18], 512U))
+            return -1;
+
+        if (!boot_range_safe(mbi[19], 256U))
+            return -1;
+    }
+
+    /*
+     * Bit 12: informacion de framebuffer.
+     * El hardware framebuffer puede estar
+     * fuera de la RAM ordinaria.
+     *
+     * No lo desreferenciamos ni lo tratamos
+     * como una cadena o tabla en RAM.
+     */
+
+    return 0;
+}
+

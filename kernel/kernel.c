@@ -247,6 +247,7 @@ else if (iguales(linea, "help")) {
     imprimir("pmmguard\n");
     imprimir("pmmvalidate\n");
     imprimir("bootrefs\n");
+    imprimir("bootvalidate\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -854,6 +855,21 @@ else if (iguales(linea, "bootrefs")) {
             imprimir_hex32(mbi[19]);
             imprimir("\n");
         }
+    }
+}
+
+else if (iguales(linea, "bootvalidate")) {
+    imprimir("=== VALIDACION MULTIBOOT ===\n");
+
+    if (memory_map_validate_boot() == 0) {
+        imprimir("Estructura principal: OK\n");
+        imprimir("Rangos de arranque conocidos: OK\n");
+        imprimir("Limite protegido 4 MiB: OK\n");
+        imprimir("BOOT VALIDATION: OK\n");
+    } else {
+        color = 0x0C;
+        imprimir("BOOT VALIDATION: ERROR\n");
+        color = 0x0F;
     }
 }
 
