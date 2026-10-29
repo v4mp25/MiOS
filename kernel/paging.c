@@ -333,3 +333,112 @@ int paging_test_unmap(void) {
 
     return 0;
 }
+
+/*
+ * MiOS - VMM experimental de cuatro paginas.
+ *
+ * Usa el indice 65 del directorio, separado
+ * del indice 64 de vmmtest.
+ */
+
+#define VMM_DIRECTORY_INDEX 65U
+
+static uint32_t vmm_table[1024]
+    __attribute__((aligned(4096)));
+
+static int vmm_initialized = 0;
+
+/*
+ * Preparar una tabla privada para esta region.
+ * Solo debe utilizarse con paginacion activada.
+ */
+static int vmm_prepare(void) {
+    if (!paging_cpu_enabled() || !initialized)
+        return -1;
+
+    if (vmm_initialized)
+        return 0;
+
+    if (page_directory[VMM_DIRECTORY_INDEX] != 0)
+        return -1;
+
+    for (uint32_t i = 0; i < 1024; i++)
+        vmm_table[i] = 0;
+
+    page_directory[VMM_DIRECTORY_INDEX] =
+        ((uint32_t)(uintptr_t)&vmm_table[0])
+        | PAGE_PRESENT | PAGE_WRITE;
+
+    paging_flush_tlb();
+
+    vmm_initialized = 1;
+    return 0;
+}
+
+/* Invalidar una direccion virtual concreta */
+static void vmm_invalidate(uint32_t address) {
+    __asm__ volatile (
+        "invlpg (%0)"
+        :
+        : "r"(address)
+        : "memory"
+    );
+}
+
+/* Mapear una de las cuatro paginas */
+int vmm_map_page(
+    uint32_t index,
+    uint32_t physical_frame
+) {
+    if (index >= MIOS_VMM_PAGES)
+        return -1;
+
+    if ((physical_frame & 0xFFFU) != 0)
+        return -1;
+
+    if (physical_frame < 0x00400000U ||
+        physical_frame >= 128U * 1024U * 1024U)
+        return -1;
+
+    if (vmm_prepare() != 0)
+        return -1;
+
+    if (vmm_table[index] & PAGE_PRESENT)
+        return -1;
+
+    vmm_table[index] =
+        physical_frame | PAGE_PRESENT | PAGE_WRITE;
+
+    vmm_invalidate(
+        MIOS_VMM_BASE + index * PAGE_SIZE
+    );
+
+    return 0;
+}
+
+/* Retirar un mapeo sin liberar su marco fisico */
+int vmm_unmap_page(uint32_t index) {
+    if (!vmm_initialized ||
+        index >= MIOS_VMM_PAGES)
+        return -1;
+
+    if (!(vmm_table[index] & PAGE_PRESENT))
+        return -1;
+
+    vmm_table[index] = 0;
+
+    vmm_invalidate(
+        MIOS_VMM_BASE + index * PAGE_SIZE
+    );
+
+    return 0;
+}
+
+/* Consultar si una pagina esta mapeada */
+int vmm_page_mapped(uint32_t index) {
+    if (!vmm_initialized ||
+        index >= MIOS_VMM_PAGES)
+        return 0;
+
+    return (vmm_table[index] & PAGE_PRESENT) != 0;
+}

@@ -252,6 +252,7 @@ else if (iguales(linea, "help")) {
     imprimir("paginginfo\n");
     imprimir("vmmtest\n");
     imprimir("pagingon, pagingstatus\n");
+    imprimir("vmmmulti\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1008,6 +1009,88 @@ else if (iguales(linea, "vmmtest")) {
                 imprimir("Contabilidad PMM: OK\n");
             else
                 imprimir("ERROR: diferencia de marcos.\n");
+        }
+    }
+}
+
+else if (iguales(linea, "vmmmulti")) {
+    imprimir("=== PRUEBA VMM MULTIPAGINA ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("ERROR: ejecuta pagingon primero.\n");
+    } else {
+        uint32_t frames[MIOS_VMM_PAGES] = {0};
+        uint32_t allocated = 0;
+        uint32_t mapped = 0;
+        uint32_t before = pmm_free_frames();
+        int success = 1;
+
+        /* Reservar cuatro marcos fisicos */
+        for (uint32_t i = 0; i < MIOS_VMM_PAGES; i++) {
+            if (pmm_alloc_frame(&frames[i]) != 0) {
+                success = 0;
+                break;
+            }
+            allocated++;
+        }
+
+        /* Mapear los marcos reservados */
+        if (success) {
+            for (uint32_t i = 0; i < MIOS_VMM_PAGES; i++) {
+                if (vmm_map_page(i, frames[i]) != 0) {
+                    success = 0;
+                    break;
+                }
+                mapped++;
+            }
+        }
+
+        /* Probar escritura y lectura reales */
+        if (success) {
+            for (uint32_t i = 0; i < MIOS_VMM_PAGES; i++) {
+                volatile uint32_t *ptr =
+                    (volatile uint32_t *)(uintptr_t)
+                    (MIOS_VMM_BASE + i * PAGE_SIZE);
+
+                ptr[0] = 1000U + i;
+                ptr[1023] = 2000U + i;
+            }
+
+            for (uint32_t i = 0; i < MIOS_VMM_PAGES; i++) {
+                volatile uint32_t *ptr =
+                    (volatile uint32_t *)(uintptr_t)
+                    (MIOS_VMM_BASE + i * PAGE_SIZE);
+
+                if (ptr[0] != 1000U + i ||
+                    ptr[1023] != 2000U + i)
+                    success = 0;
+            }
+
+            if (success)
+                imprimir("Lectura y escritura: OK\n");
+        }
+
+        /* Retirar los mapeos */
+        for (uint32_t i = 0; i < mapped; i++) {
+            if (vmm_unmap_page(i) != 0)
+                success = 0;
+        }
+
+        /* Liberar los marcos del PMM */
+        for (uint32_t i = 0; i < allocated; i++) {
+            if (pmm_free_frame(frames[i]) != 0)
+                success = 0;
+        }
+
+        if (pmm_free_frames() != before)
+            success = 0;
+
+        if (success) {
+            imprimir("Cuatro paginas virtuales: OK\n");
+            imprimir("Desmapeo y liberacion: OK\n");
+            imprimir("VMM MULTI: OK\n");
+        } else {
+            imprimir("VMM MULTI: ERROR\n");
         }
     }
 }

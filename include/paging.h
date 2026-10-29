@@ -26,5 +26,20 @@ int paging_cpu_enabled(void);
 int paging_test_map(uint32_t physical_frame);
 int paging_test_unmap(void);
 
+/* Region experimental para multiples paginas */
+#define MIOS_VMM_BASE 0x10400000U
+#define MIOS_VMM_PAGES 4U
+
+int vmm_map_page(
+    uint32_t index,
+    uint32_t physical_frame
+);
+
+int vmm_unmap_page(uint32_t index);
+
+int vmm_page_mapped(uint32_t index);
+
+
+
 #endif
 
