@@ -146,6 +146,32 @@ static void tarea_hilo_2(void) {
     }
 }
 
+/* Prueba de multitarea apropiativa */
+static volatile uint32_t prueba_hilo2_ejecutado = 0;
+static volatile uint32_t prueba_hilo1_detecto_hilo2 = 0;
+
+static void sched_tarea1(void) {
+    uint32_t inicio = timer_get_ticks();
+
+    /*
+     * No llamamos a thread_yield().
+     * Esperamos hasta que el hilo 2 ejecute.
+     * Limite de 2 segundos para evitar
+     * bloquear indefinidamente la prueba.
+     */
+    while (!prueba_hilo2_ejecutado &&
+           (uint32_t)(timer_get_ticks() - inicio) < 200U) {
+        __asm__ volatile ("" ::: "memory");
+    }
+
+    if (prueba_hilo2_ejecutado)
+        prueba_hilo1_detecto_hilo2 = 1;
+}
+
+static void sched_tarea2(void) {
+    prueba_hilo2_ejecutado = 1;
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -167,6 +193,7 @@ else if (iguales(linea, "help")) {
     imprimir("meminfo, memtest\n");
     imprimir("testexception\n");
     imprimir("threadtest\n");
+    imprimir("schedtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -309,6 +336,29 @@ else if (iguales(linea, "threadtest")) {
             imprimir("\nAmbos hilos finalizaron.\n");
         } else {
             imprimir("Error al ejecutar hilos.\n");
+        }
+    }
+}
+
+else if (iguales(linea, "schedtest")) {
+    imprimir("Prueba Round Robin automatico...\n");
+
+    prueba_hilo2_ejecutado = 0;
+    prueba_hilo1_detecto_hilo2 = 0;
+
+    int a = thread_create(sched_tarea1);
+    int b = thread_create(sched_tarea2);
+
+    if (a < 0 || b < 0) {
+        imprimir("Error al crear hilos.\n");
+    } else {
+        thread_run();
+
+        if (prueba_hilo1_detecto_hilo2) {
+            imprimir("Round Robin: FUNCIONANDO\n");
+            imprimir("Hilo 2 ejecuto sin yield voluntario.\n");
+        } else {
+            imprimir("Round Robin: PRUEBA FALLIDA\n");
         }
     }
 }

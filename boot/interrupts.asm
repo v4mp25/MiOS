@@ -76,11 +76,40 @@ isr_common:
     jmp .halt
 
 ; Temporizador original de MiOS
+
+; IRQ0: interrupcion del temporizador.
+; El controlador C devuelve el ESP
+; que debemos restaurar.
+
+global yield_stub
+extern timer_irq_dispatch
+extern scheduler_on_yield
+
 irq0_stub:
     cld
     pushad
 
-    call timer_irq_handler
+    push esp
+    call timer_irq_dispatch
+    add esp, 4
+
+    ; EAX contiene el ESP seleccionado.
+    mov esp, eax
+
+    popad
+    iretd
+
+; Interrupcion de software para
+; permitir un yield voluntario.
+yield_stub:
+    cld
+    pushad
+
+    push esp
+    call scheduler_on_yield
+    add esp, 4
+
+    mov esp, eax
 
     popad
     iretd

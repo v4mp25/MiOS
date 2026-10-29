@@ -12,4 +12,9 @@ void thread_yield(void);
 int thread_run(void);
 uint32_t thread_count(void);
 
+/* Funciones usadas por las interrupciones */
+uint32_t scheduler_on_tick(uint32_t esp);
+uint32_t scheduler_on_yield(uint32_t esp);
+
 #endif
+

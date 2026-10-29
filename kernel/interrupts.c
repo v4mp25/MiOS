@@ -1,7 +1,7 @@
 
 #include <stdint.h>
 #include "interrupts.h"
-
+#include "thread.h"
 #define PIC1_COMMAND 0x20
 #define PIC1_DATA    0x21
 #define PIC2_COMMAND 0xA0
@@ -31,6 +31,7 @@ static idt_pointer_t idt_pointer;
 static volatile uint32_t timer_ticks = 0;
 
 extern void irq0_stub(void);
+extern void yield_stub(void);
 extern void (*isr_stub_table[32])(void);
 
 static inline void outb(uint16_t port, uint8_t value) {
@@ -103,6 +104,14 @@ void timer_irq_handler(void) {
 
     /* Avisar al PIC que terminamos de atender IRQ0 */
     outb(PIC1_COMMAND, 0x20);
+}
+
+uint32_t timer_irq_dispatch(uint32_t esp) {
+    /* Actualiza ticks y notifica al PIC */
+    timer_irq_handler();
+
+    /* Selecciona el contexto que continuara */
+    return scheduler_on_tick(esp);
 }
 
 uint32_t timer_get_ticks(void) {
@@ -235,7 +244,11 @@ for (uint32_t i = 0; i < 32; i++) {
 
     idt_pointer.limit = sizeof(idt) - 1;
     idt_pointer.base = (uint32_t)&idt;
-
+idt_set_gate(
+    48,
+    (uint32_t)yield_stub,
+    read_cs()
+);
     __asm__ volatile (
         "lidt %0"
         :
