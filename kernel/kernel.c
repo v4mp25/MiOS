@@ -216,6 +216,7 @@ else if (iguales(linea, "help")) {
     imprimir("threadtest\n");
     imprimir("schedtest\n");
     imprimir("ps, proctest\n");
+    imprimir("uptime\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -465,6 +466,32 @@ else if (iguales(linea, "proctest")) {
             imprimir("Error en la prueba.\n");
         }
     }
+}
+
+else if (iguales(linea, "uptime")) {
+    uint32_t ticks = timer_get_ticks();
+
+    uint32_t segundos = ticks / 100U;
+    uint32_t minutos = segundos / 60U;
+    uint32_t horas = minutos / 60U;
+
+    imprimir("=== TIEMPO DE MIOS ===\n");
+
+    imprimir("Horas: ");
+    imprimir_numero(horas);
+    imprimir("\n");
+
+    imprimir("Minutos: ");
+    imprimir_numero(minutos % 60U);
+    imprimir("\n");
+
+    imprimir("Segundos: ");
+    imprimir_numero(segundos % 60U);
+    imprimir("\n");
+
+    imprimir("Ticks totales: ");
+    imprimir_numero(ticks);
+    imprimir("\n");
 }
 
     else {
