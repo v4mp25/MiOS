@@ -256,6 +256,7 @@ else if (iguales(linea, "help")) {
     imprimir("vmmguard\n");
     imprimir("vmmreadonly\n");
     imprimir("vmmwritetest\n");
+    imprimir("pmmownership\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1275,6 +1276,61 @@ else if (iguales(linea, "vmmwritetest")) {
                 if (vmm_unmap_page(0) == 0)
                     pmm_free_frame(marco);
             }
+        }
+    }
+}
+
+else if (iguales(linea, "pmmownership")) {
+    imprimir("=== PROTECCION DE MARCOS ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("Primero ejecuta pagingon.\n");
+    } else if (vmm_page_mapped(0)) {
+        imprimir("ERROR: pagina de prueba ocupada.\n");
+    } else {
+        uint32_t marco = 0;
+        uint32_t libres_antes = pmm_free_frames();
+        int ok = 1;
+
+        if (pmm_alloc_frame(&marco) != 0) {
+            imprimir("ERROR: reserva fisica.\n");
+        } else if (vmm_map_page(0, marco) != 0) {
+            imprimir("ERROR: mapeo virtual.\n");
+            pmm_free_frame(marco);
+        } else {
+            if (pmm_frame_pin_count(marco) == 1)
+                imprimir("Referencia de mapeo: OK\n");
+            else
+                ok = 0;
+
+            /* Debe rechazar esta liberacion */
+            if (pmm_free_frame(marco) != 0)
+                imprimir("Liberacion prematura: BLOQUEADA\n");
+            else {
+                imprimir("ERROR: liberacion permitida.\n");
+                ok = 0;
+            }
+
+            if (vmm_unmap_page(0) == 0)
+                imprimir("Desmapeo: OK\n");
+            else
+                ok = 0;
+
+            if (pmm_frame_pin_count(marco) != 0)
+                ok = 0;
+
+            if (pmm_free_frame(marco) == 0)
+                imprimir("Liberacion posterior: OK\n");
+            else
+                ok = 0;
+
+            if (pmm_free_frames() != libres_antes)
+                ok = 0;
+
+            if (ok)
+                imprimir("PMM OWNERSHIP: OK\n");
+            else
+                imprimir("PMM OWNERSHIP: ERROR\n");
         }
     }
 }

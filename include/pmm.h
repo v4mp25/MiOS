@@ -20,4 +20,8 @@ int pmm_free_frame(uint32_t address);
 int pmm_is_reserved(uint32_t address);
 int pmm_validate(void);
 int pmm_frame_allocated(uint32_t address);
+/* Impedir liberar marcos mientras estan mapeados */
+int pmm_pin_frame(uint32_t address);
+int pmm_unpin_frame(uint32_t address);
+uint32_t pmm_frame_pin_count(uint32_t address);
 #endif

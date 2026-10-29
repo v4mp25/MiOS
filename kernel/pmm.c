@@ -32,6 +32,8 @@ extern uint32_t mios_mbi_address;
 
 static uint8_t used_bitmap[PMM_BITMAP_BYTES];
 static uint8_t allocated_bitmap[PMM_BITMAP_BYTES];
+/* Numero de mapeos activos por marco fisico */
+static uint16_t frame_pins[PMM_MAX_FRAMES];
 
 static uint32_t total_frames = 0;
 static uint32_t free_frames = 0;
@@ -264,6 +266,9 @@ int pmm_init(void) {
         used_bitmap[i] = 0xFF;
         allocated_bitmap[i] = 0;
     }
+    for (uint32_t i = 0; i < PMM_MAX_FRAMES; i++) {
+    frame_pins[i] = 0;
+}
     /*
      * Primera pasada:
      * desbloquear regiones tipo 1.
@@ -380,32 +385,47 @@ int pmm_alloc_frame(uint32_t *address) {
     return -1;
 }
 
+
 int pmm_free_frame(uint32_t address) {
-    if (!pmm_ready)
-        return -1;
 
-    if (address % PMM_FRAME_SIZE != 0)
+    /* Verificar que el PMM este inicializado */
+    if (!pmm_ready) {
         return -1;
+    }
 
+    /* Verificar alineacion de 4096 bytes */
+    if (address % PMM_FRAME_SIZE != 0) {
+        return -1;
+    }
+
+    /* Verificar que la direccion sea valida */
     if (address < PMM_SAFE_START ||
-        address >= PMM_LIMIT_BYTES)
+        address >= PMM_LIMIT_BYTES) {
         return -1;
+    }
 
     uint32_t index = address / PMM_FRAME_SIZE;
 
-    /*
-     * Impedir liberar marcos reservados,
-     * inexistentes o ya liberados.
-     */
-    if (!bit_get(allocated_bitmap, index))
+    /* Impedir liberar marcos no asignados */
+    if (!bit_get(allocated_bitmap, index)) {
         return -1;
+    }
 
+    /* Impedir liberar memoria que sigue mapeada */
+    if (frame_pins[index] != 0) {
+        return -1;
+    }
+
+    /* Liberar el marco fisico */
     bit_clear(allocated_bitmap, index);
     mark_free(index);
+
+    /* Actualizar contador de memoria libre */
     free_frames++;
 
     return 0;
 }
+
 
 int pmm_is_reserved(uint32_t address) {
     if (!pmm_ready)
@@ -553,3 +573,61 @@ int pmm_frame_allocated(uint32_t address) {
     return bit_get(allocated_bitmap, index);
 }
 
+
+/*
+ * Registrar una referencia de mapeo.
+ * El marco debe pertenecer al PMM.
+ */
+int pmm_pin_frame(uint32_t address) {
+    if (!pmm_ready)
+        return -1;
+
+    if (address % PMM_FRAME_SIZE != 0 ||
+        address < PMM_SAFE_START ||
+        address >= PMM_LIMIT_BYTES)
+        return -1;
+
+    uint32_t index = address / PMM_FRAME_SIZE;
+
+    if (!bit_get(allocated_bitmap, index))
+        return -1;
+
+    if (frame_pins[index] == UINT16_MAX)
+        return -1;
+
+    frame_pins[index]++;
+    return 0;
+}
+
+/* Quitar una referencia de mapeo */
+int pmm_unpin_frame(uint32_t address) {
+    if (!pmm_ready)
+        return -1;
+
+    if (address % PMM_FRAME_SIZE != 0 ||
+        address < PMM_SAFE_START ||
+        address >= PMM_LIMIT_BYTES)
+        return -1;
+
+    uint32_t index = address / PMM_FRAME_SIZE;
+
+    if (!bit_get(allocated_bitmap, index))
+        return -1;
+
+    if (frame_pins[index] == 0)
+        return -1;
+
+    frame_pins[index]--;
+    return 0;
+}
+
+/* Consultar cuantas referencias tiene */
+uint32_t pmm_frame_pin_count(uint32_t address) {
+    if (!pmm_ready ||
+        address % PMM_FRAME_SIZE != 0 ||
+        address < PMM_SAFE_START ||
+        address >= PMM_LIMIT_BYTES)
+        return 0;
+
+    return frame_pins[address / PMM_FRAME_SIZE];
+}

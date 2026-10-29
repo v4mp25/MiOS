@@ -297,7 +297,8 @@ int paging_test_map(uint32_t physical_frame) {
     for (uint32_t i = 0; i < 1024; i++) {
         test_page_table[i] = 0;
     }
-
+if (pmm_pin_frame(physical_frame) != 0)
+    return -1;
     /* Primera entrada de la tabla */
     test_page_table[0] =
         physical_frame | PAGE_PRESENT | PAGE_WRITE;
@@ -322,8 +323,12 @@ int paging_test_unmap(void) {
         return -1;
 
     /* Retirar primero la pagina */
-    test_page_table[0] = 0;
+   
+uint32_t physical_frame =
+    test_page_table[0] & 0xFFFFF000U;
 
+if (pmm_unpin_frame(physical_frame) != 0)
+    return -1;
     /* Retirar tambien la tabla del directorio */
     page_directory[TEST_DIRECTORY_INDEX] = 0;
 
@@ -421,7 +426,9 @@ int vmm_map_page(
 
     if (vmm_table[index] & PAGE_PRESENT)
         return -1;
-
+/* Registrar el mapeo antes de hacerlo visible */
+if (pmm_pin_frame(physical_frame) != 0)
+    return -1;
     vmm_table[index] =
         physical_frame | PAGE_PRESENT | PAGE_WRITE;
 
@@ -433,14 +440,24 @@ int vmm_map_page(
 }
 
 /* Retirar un mapeo sin liberar su marco fisico */
+
 int vmm_unmap_page(uint32_t index) {
-    if (!vmm_initialized ||
+    if (!paging_cpu_enabled() ||
+        !vmm_initialized ||
         index >= MIOS_VMM_PAGES)
         return -1;
 
     if (!(vmm_table[index] & PAGE_PRESENT))
         return -1;
 
+    uint32_t physical_frame =
+        vmm_table[index] & 0xFFFFF000U;
+
+    /* Verificar y retirar referencia */
+    if (pmm_unpin_frame(physical_frame) != 0)
+        return -1;
+
+    /* Eliminar la asociacion virtual */
     vmm_table[index] = 0;
 
     vmm_invalidate(
