@@ -94,3 +94,149 @@ uint32_t paging_directory_address(void) {
 int paging_ready(void) {
     return initialized;
 }
+
+/*
+ * Consultar si la CPU tiene paginacion activa.
+ * CR0 bit 31 = PG.
+ */
+int paging_cpu_enabled(void) {
+    uint32_t cr0;
+
+    __asm__ volatile (
+        "mov %%cr0, %0"
+        : "=r"(cr0)
+    );
+
+    return (cr0 & 0x80000000U) != 0;
+}
+
+/*
+ * Activar paginacion x86 de 32 bits.
+ *
+ * Requisitos:
+ * - Tablas inicializadas.
+ * - Directorio alineado a 4096 bytes.
+ * - Mapeo de identidad para el kernel.
+ * - Pila, IDT y estructuras activas accesibles.
+ */
+int paging_enable(void) {
+    if (!initialized)
+        return -1;
+
+    uint32_t directory =
+        (uint32_t)(uintptr_t)page_directory;
+
+    if ((directory & 0xFFFU) != 0)
+        return -1;
+
+    if (directory >= 128U * 1024U * 1024U)
+        return -1;
+
+    extern char __kernel_end[];
+
+    const uint32_t limit = 128U * 1024U * 1024U;
+
+    uint32_t kernel_end =
+        (uint32_t)(uintptr_t)__kernel_end;
+
+    uint32_t stack_address;
+
+    __asm__ volatile (
+        "mov %%esp, %0"
+        : "=r"(stack_address)
+    );
+
+    struct __attribute__((packed)) {
+        uint16_t size;
+        uint32_t address;
+    } idtr;
+
+    __asm__ volatile (
+        "sidt %0"
+        : "=m"(idtr)
+    );
+
+    if (kernel_end >= limit ||
+        stack_address >= limit ||
+        idtr.address >= limit)
+        return -1;
+
+    if ((uint64_t)idtr.address +
+        (uint64_t)idtr.size >= limit)
+        return -1;
+
+    for (uint32_t i = 0;
+         i < PAGE_TABLE_COUNT; i++) {
+
+        uint32_t table_address =
+            (uint32_t)(uintptr_t)&page_tables[i][0];
+
+        if ((table_address & 0xFFFU) != 0 ||
+            (uint64_t)table_address + PAGE_SIZE > limit)
+            return -1;
+    }
+
+    uint32_t cr0;
+
+    __asm__ volatile (
+        "mov %%cr0, %0"
+        : "=r"(cr0)
+    );
+
+    /* No reemplazar una paginacion ya activa */
+    if (cr0 & 0x80000000U)
+        return -1;
+
+    /* La paginacion requiere modo protegido */
+    if (!(cr0 & 0x00000001U))
+        return -1;
+
+    uint32_t flags;
+
+    /* Guardar IF y deshabilitar interrupciones */
+    __asm__ volatile (
+        "pushfl\n\t"
+        "popl %0\n\t"
+        "cli"
+        : "=r"(flags)
+        :
+        : "memory"
+    );
+
+    /*
+     * CR3 recibe la direccion fisica del
+     * directorio de paginas.
+     *
+     * Antes de activar PG, nuestra direccion
+     * lineal coincide con la fisica.
+     */
+    __asm__ volatile (
+        "mov %0, %%cr3"
+        :
+        : "r"(directory)
+        : "memory"
+    );
+
+    /*
+     * Activar bit PG (31) de CR0.
+     * El salto inmediato continua la ejecucion
+     * con el mapeo de identidad.
+     */
+    __asm__ volatile (
+        "mov %%cr0, %%eax\n\t"
+        "or $0x80000000, %%eax\n\t"
+        "mov %%eax, %%cr0\n\t"
+        "jmp 1f\n\t"
+        "1:"
+        :
+        :
+        : "eax", "memory"
+    );
+
+    /* Restaurar el estado anterior de IF */
+    if (flags & (1U << 9)) {
+        __asm__ volatile ("sti" ::: "memory");
+    }
+
+    return paging_cpu_enabled() ? 0 : -1;
+}

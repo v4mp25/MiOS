@@ -201,9 +201,52 @@ void exception_handler(const uint32_t *frame) {
         case 13:
             error_print("Fallo de proteccion general\n");
             break;
-        case 14:
-            error_print("Fallo de pagina\n");
-            break;
+        
+case 14: {
+    uint32_t cr2;
+
+    /* CR2 contiene la direccion que provoco el fallo */
+    __asm__ volatile (
+        "mov %%cr2, %0"
+        : "=r"(cr2)
+    );
+
+    error_print("PAGE FAULT - FALLO DE PAGINA\n");
+
+    error_print("Direccion virtual: ");
+    error_hex(cr2);
+    error_print("\n");
+
+    error_print("Causa: ");
+
+    if (error_code & 0x01)
+        error_print("Violacion de proteccion\n");
+    else
+        error_print("Pagina no presente\n");
+
+    error_print("Operacion: ");
+
+    if (error_code & 0x02)
+        error_print("Escritura\n");
+    else
+        error_print("Lectura\n");
+
+    error_print("Modo: ");
+
+    if (error_code & 0x04)
+        error_print("Usuario\n");
+    else
+        error_print("Kernel\n");
+
+    if (error_code & 0x08)
+        error_print("Bit reservado invalido\n");
+
+    if (error_code & 0x10)
+        error_print("Fallo durante busqueda de instruccion\n");
+
+    break;
+}
+
         default:
             error_print("Excepcion del procesador\n");
             break;

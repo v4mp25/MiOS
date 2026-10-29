@@ -250,6 +250,7 @@ else if (iguales(linea, "help")) {
     imprimir("bootrefs\n");
     imprimir("bootvalidate\n");
     imprimir("paginginfo\n");
+    imprimir("pagingon, pagingstatus\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -907,6 +908,49 @@ else if (iguales(linea, "paginginfo")) {
         imprimir("Paginacion CPU: NO ACTIVADA\n");
     }
 }
+
+else if (iguales(linea, "pagingon")) {
+    imprimir("=== ACTIVANDO PAGINACION ===\n");
+
+    if (paging_cpu_enabled()) {
+        imprimir("Paginacion ya esta activa.\n");
+    }
+    else if (paging_enable() == 0) {
+        imprimir("Paginacion activada: OK\n");
+        imprimir("CR0.PG = 1\n");
+
+        imprimir("Directorio CR3: ");
+        imprimir_hex32(paging_directory_address());
+        imprimir("\n");
+    }
+    else {
+        imprimir("ERROR: no se pudo activar.\n");
+    }
+}
+else if (iguales(linea, "pagingstatus")) {
+    imprimir("=== ESTADO DE PAGINACION ===\n");
+
+    if (paging_cpu_enabled())
+        imprimir("Paginacion CPU: ACTIVA\n");
+    else
+        imprimir("Paginacion CPU: INACTIVA\n");
+}
+
+else if (iguales(linea, "pagefaulttest")) {
+    if (!paging_cpu_enabled()) {
+        imprimir("ERROR: paginacion desactivada.\n");
+        imprimir("Primero ejecuta pagingon.\n");
+    } else {
+        imprimir("Provocando Page Fault de prueba...\n");
+
+        volatile uint32_t *direccion =
+            (volatile uint32_t *)0x20000000U;
+
+        volatile uint32_t valor = *direccion;
+        (void)valor;
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);

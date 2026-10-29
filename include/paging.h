@@ -13,6 +13,10 @@ int paging_is_mapped(uint32_t address);
 
 /* Solo consulta, no activa la paginacion */
 uint32_t paging_directory_address(void);
+/* Activar paginacion de la CPU */
+int paging_enable(void);
 
+/* Consultar el bit PG del registro CR0 */
+int paging_cpu_enabled(void);
 #endif
 
