@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include "pmm.h"
 #include "memory_map.h"
+
+#include "irq.h"
 /* Simbolos proporcionados por linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -350,21 +352,35 @@ if (mios_mmap_length != 0) {
     return 0;
 }
 
+
 uint32_t pmm_total_frames(void) {
-    return total_frames;
+    uint32_t flags = irq_save();
+    uint32_t result = total_frames;
+    irq_restore(flags);
+    return result;
 }
 
 uint32_t pmm_free_frames(void) {
-    return free_frames;
+    uint32_t flags = irq_save();
+    uint32_t result = free_frames;
+    irq_restore(flags);
+    return result;
 }
 
 uint32_t pmm_used_frames(void) {
-    return total_frames - free_frames;
+    uint32_t flags = irq_save();
+    uint32_t result = total_frames - free_frames;
+    irq_restore(flags);
+    return result;
 }
 
 int pmm_alloc_frame(uint32_t *address) {
-    if (!pmm_ready || address == 0)
+    uint32_t flags = irq_save();
+
+    if (!pmm_ready || address == 0) {
+        irq_restore(flags);
         return -1;
+    }
 
     for (uint32_t i = PMM_SAFE_START / PMM_FRAME_SIZE;
          i < PMM_MAX_FRAMES;
@@ -374,57 +390,52 @@ int pmm_alloc_frame(uint32_t *address) {
             mark_reserved(i);
             bit_set(allocated_bitmap, i);
 
+            frame_pins[i] = 0;
             free_frames--;
 
             *address = i * PMM_FRAME_SIZE;
 
+            irq_restore(flags);
             return 0;
         }
     }
 
+    irq_restore(flags);
     return -1;
 }
 
 
+
+
 int pmm_free_frame(uint32_t address) {
+    uint32_t flags = irq_save();
 
-    /* Verificar que el PMM este inicializado */
-    if (!pmm_ready) {
-        return -1;
-    }
-
-    /* Verificar alineacion de 4096 bytes */
-    if (address % PMM_FRAME_SIZE != 0) {
-        return -1;
-    }
-
-    /* Verificar que la direccion sea valida */
-    if (address < PMM_SAFE_START ||
+    if (!pmm_ready ||
+        address % PMM_FRAME_SIZE != 0 ||
+        address < PMM_SAFE_START ||
         address >= PMM_LIMIT_BYTES) {
+
+        irq_restore(flags);
         return -1;
     }
 
     uint32_t index = address / PMM_FRAME_SIZE;
 
-    /* Impedir liberar marcos no asignados */
-    if (!bit_get(allocated_bitmap, index)) {
+    if (!bit_get(allocated_bitmap, index) ||
+        frame_pins[index] != 0) {
+
+        irq_restore(flags);
         return -1;
     }
 
-    /* Impedir liberar memoria que sigue mapeada */
-    if (frame_pins[index] != 0) {
-        return -1;
-    }
-
-    /* Liberar el marco fisico */
     bit_clear(allocated_bitmap, index);
     mark_free(index);
-
-    /* Actualizar contador de memoria libre */
     free_frames++;
 
+    irq_restore(flags);
     return 0;
 }
+
 
 
 int pmm_is_reserved(uint32_t address) {
@@ -578,49 +589,61 @@ int pmm_frame_allocated(uint32_t address) {
  * Registrar una referencia de mapeo.
  * El marco debe pertenecer al PMM.
  */
-int pmm_pin_frame(uint32_t address) {
-    if (!pmm_ready)
-        return -1;
 
-    if (address % PMM_FRAME_SIZE != 0 ||
+int pmm_pin_frame(uint32_t address) {
+    uint32_t flags = irq_save();
+
+    if (!pmm_ready ||
+        address % PMM_FRAME_SIZE != 0 ||
         address < PMM_SAFE_START ||
-        address >= PMM_LIMIT_BYTES)
+        address >= PMM_LIMIT_BYTES) {
+
+        irq_restore(flags);
         return -1;
+    }
 
     uint32_t index = address / PMM_FRAME_SIZE;
 
-    if (!bit_get(allocated_bitmap, index))
-        return -1;
+    if (!bit_get(allocated_bitmap, index) ||
+        frame_pins[index] == UINT16_MAX) {
 
-    if (frame_pins[index] == UINT16_MAX)
+        irq_restore(flags);
         return -1;
+    }
 
     frame_pins[index]++;
+
+    irq_restore(flags);
     return 0;
 }
 
 /* Quitar una referencia de mapeo */
 int pmm_unpin_frame(uint32_t address) {
-    if (!pmm_ready)
-        return -1;
+    uint32_t flags = irq_save();
 
-    if (address % PMM_FRAME_SIZE != 0 ||
+    if (!pmm_ready ||
+        address % PMM_FRAME_SIZE != 0 ||
         address < PMM_SAFE_START ||
-        address >= PMM_LIMIT_BYTES)
+        address >= PMM_LIMIT_BYTES) {
+
+        irq_restore(flags);
         return -1;
+    }
 
     uint32_t index = address / PMM_FRAME_SIZE;
 
-    if (!bit_get(allocated_bitmap, index))
-        return -1;
+    if (!bit_get(allocated_bitmap, index) ||
+        frame_pins[index] == 0) {
 
-    if (frame_pins[index] == 0)
+        irq_restore(flags);
         return -1;
+    }
 
     frame_pins[index]--;
+
+    irq_restore(flags);
     return 0;
 }
-
 /* Consultar cuantas referencias tiene */
 uint32_t pmm_frame_pin_count(uint32_t address) {
     if (!pmm_ready ||

@@ -8,6 +8,7 @@
 #include "process.h"
 #include "pmm.h"
 #include "paging.h"
+#include "irq.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -257,6 +258,7 @@ else if (iguales(linea, "help")) {
     imprimir("vmmreadonly\n");
     imprimir("vmmwritetest\n");
     imprimir("pmmownership\n");
+    imprimir("irqtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1333,6 +1335,57 @@ else if (iguales(linea, "pmmownership")) {
                 imprimir("PMM OWNERSHIP: ERROR\n");
         }
     }
+}
+
+else if (iguales(linea, "irqtest")) {
+    imprimir("=== PRUEBA SECCION CRITICA ===\n");
+
+    int estado_antes = irq_enabled();
+
+    uint32_t ticks_antes = timer_get_ticks();
+
+    uint32_t flags = irq_save();
+
+    int estado_dentro = irq_enabled();
+
+    /*
+     * Segunda entrada a una seccion critica.
+     * Comprueba que la restauracion anidada
+     * no habilite interrupciones antes de tiempo.
+     */
+    uint32_t flags_anidados = irq_save();
+
+    irq_restore(flags_anidados);
+
+    int sigue_deshabilitado = !irq_enabled();
+
+    irq_restore(flags);
+
+    int estado_despues = irq_enabled();
+
+    uint32_t ticks_despues = timer_get_ticks();
+
+    if (estado_antes &&
+        !estado_dentro &&
+        sigue_deshabilitado &&
+        estado_despues) {
+
+        imprimir("Guardar EFLAGS: OK\n");
+        imprimir("Deshabilitar IRQ: OK\n");
+        imprimir("Restauracion anidada: OK\n");
+        imprimir("Restaurar interrupciones: OK\n");
+        imprimir("IRQ TEST: OK\n");
+    } else {
+        imprimir("IRQ TEST: ERROR\n");
+    }
+
+    imprimir("Ticks antes: ");
+    imprimir_numero(ticks_antes);
+    imprimir("\n");
+
+    imprimir("Ticks despues: ");
+    imprimir_numero(ticks_despues);
+    imprimir("\n");
 }
 
     else {

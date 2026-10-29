@@ -12,7 +12,7 @@ all: os.iso
 boot.o: boot/boot.asm
 	$(ASM) -f elf32 $< -o $@
 
-kernel.o: kernel/kernel.c include/fs.h include/interrupts.h include/memory.h include/thread.h include/process.h include/memory_map.h include/pmm.h include/paging.h
+kernel.o: kernel/kernel.c include/fs.h include/interrupts.h include/memory.h include/thread.h include/process.h include/memory_map.h include/pmm.h include/paging.h include/irq.h
 	$(CC) $(CFLAGS) -c kernel/kernel.c -o kernel.o
 fs.o: fs/fs.c include/fs.h
 	$(CC) $(CFLAGS) -c fs/fs.c -o fs.o
