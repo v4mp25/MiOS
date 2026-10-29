@@ -253,6 +253,7 @@ else if (iguales(linea, "help")) {
     imprimir("vmmtest\n");
     imprimir("pagingon, pagingstatus\n");
     imprimir("vmmmulti\n");
+    imprimir("vmmguard\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1092,6 +1093,61 @@ else if (iguales(linea, "vmmmulti")) {
         } else {
             imprimir("VMM MULTI: ERROR\n");
         }
+    }
+}
+
+else if (iguales(linea, "vmmguard")) {
+    imprimir("=== PROTECCION DEL VMM ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("Primero ejecuta pagingon.\n");
+    } else {
+        uint32_t marco = 0;
+        uint32_t libres_antes = pmm_free_frames();
+        int ok = 1;
+
+        /* No permitir un marco no asignado */
+        if (vmm_map_page(0, 0x00400000U) == 0) {
+            imprimir("ERROR: marco no reservado.\n");
+            vmm_unmap_page(0);
+            ok = 0;
+        } else {
+            imprimir("Marco no reservado: RECHAZADO\n");
+        }
+
+        if (pmm_alloc_frame(&marco) != 0) {
+            imprimir("ERROR: reserva PMM.\n");
+            ok = 0;
+        } else {
+            if (vmm_map_page(0, marco) != 0) {
+                imprimir("ERROR: primer mapeo.\n");
+                ok = 0;
+            } else {
+                imprimir("Primer mapeo: OK\n");
+
+                if (vmm_map_page(1, marco) == 0) {
+                    imprimir("ERROR: duplicacion permitida.\n");
+                    vmm_unmap_page(1);
+                    ok = 0;
+                } else {
+                    imprimir("Duplicacion: RECHAZADA\n");
+                }
+
+                if (vmm_unmap_page(0) != 0)
+                    ok = 0;
+            }
+
+            if (pmm_free_frame(marco) != 0)
+                ok = 0;
+        }
+
+        if (pmm_free_frames() != libres_antes)
+            ok = 0;
+
+        if (ok)
+            imprimir("VMM GUARD: OK\n");
+        else
+            imprimir("VMM GUARD: ERROR\n");
     }
 }
 

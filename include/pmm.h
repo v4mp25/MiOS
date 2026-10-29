@@ -19,4 +19,5 @@ int pmm_alloc_frame(uint32_t *address);
 int pmm_free_frame(uint32_t address);
 int pmm_is_reserved(uint32_t address);
 int pmm_validate(void);
+int pmm_frame_allocated(uint32_t address);
 #endif

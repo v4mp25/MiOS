@@ -1,7 +1,7 @@
 
 #include <stdint.h>
 #include "paging.h"
-
+#include "pmm.h"
 /*
  * MiOS - Preparacion de paginacion x86
  *
@@ -399,6 +399,22 @@ int vmm_map_page(
     if (physical_frame < 0x00400000U ||
         physical_frame >= 128U * 1024U * 1024U)
         return -1;
+
+    /* Exigir un marco realmente reservado */
+    if (!pmm_frame_allocated(physical_frame))
+        return -1;
+
+    /*
+     * Impedir que dos paginas de esta region
+     * compartan accidentalmente el mismo marco.
+     */
+    for (uint32_t i = 0; i < MIOS_VMM_PAGES; i++) {
+        if (vmm_page_mapped(i) &&
+            (vmm_table[i] & 0xFFFFF000U)
+                == physical_frame) {
+            return -1;
+        }
+    }
 
     if (vmm_prepare() != 0)
         return -1;

@@ -536,3 +536,20 @@ int pmm_validate(void) {
     return 0;
 }
 
+/* Verificar si un marco fue reservado por el PMM */
+int pmm_frame_allocated(uint32_t address) {
+    if (!pmm_ready)
+        return 0;
+
+    if (address % PMM_FRAME_SIZE != 0)
+        return 0;
+
+    if (address < PMM_SAFE_START ||
+        address >= PMM_LIMIT_BYTES)
+        return 0;
+
+    uint32_t index = address / PMM_FRAME_SIZE;
+
+    return bit_get(allocated_bitmap, index);
+}
+
