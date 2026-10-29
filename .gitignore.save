@@ -1,0 +1,15 @@
+# Archivos compilados
+*.o
+*.bin
+*.iso
+
+# Discos virtuales
+*.img
+*.qcow2
+
+# Archivos temporales
+*.log
+*.tmp
+
+# Archivos de editor
+.vscode/
