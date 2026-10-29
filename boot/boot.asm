@@ -19,8 +19,13 @@ extern kernel_main
 _start:
     mov esp, stack_top
     cld
+
+    ; Pasar información Multiboot al kernel
+    push ebx
+    push eax
     call kernel_main
 
+    add esp, 8
 .hang:
     cli
     hlt

@@ -4,7 +4,15 @@
 #include "interrupts.h"
 #include "memory.h"
 #include "thread.h"
+#include "memory_map.h"
 #include "process.h"
+/* Limites del kernel definidos en linker.ld */
+extern char __kernel_start[];
+extern char __kernel_end[];
+
+/* Ubicacion del mapa Multiboot */
+extern uint32_t mios_mmap_start;
+extern uint32_t mios_mmap_length;
 static void imprimir_numero(uint32_t numero);
 #define VGA_WIDTH 80
 #define VGA_HEIGHT 25
@@ -16,7 +24,7 @@ static volatile uint16_t *const VGA = (volatile uint16_t *)0xB8000;
 static size_t fila = 0, columna = 0;
 static uint8_t color = 0x0F;
 static uint16_t cwd = 0;
-
+static uint32_t mbi_saved_address = 0;
 static inline uint8_t inb(uint16_t port) {
     uint8_t value;
     __asm__ volatile ("inb %1, %0" : "=a"(value) : "Nd"(port));
@@ -193,6 +201,19 @@ static void tarea_proceso_b(void) {
     proceso_b_ejecuto = 1;
 }
 
+static void imprimir_hex32(uint32_t numero) {
+    const char *hex = "0123456789ABCDEF";
+
+    imprimir("0x");
+
+    for (int i = 7; i >= 0; i--) {
+        uint32_t valor =
+            (numero >> (i * 4)) & 0xF;
+
+        poner_caracter(hex[valor]);
+    }
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -217,6 +238,9 @@ else if (iguales(linea, "help")) {
     imprimir("schedtest\n");
     imprimir("ps, proctest\n");
     imprimir("uptime\n");
+    imprimir("memmap\n");
+    imprimir("memdebug\n");
+    imprimir("bootinfo\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -494,6 +518,115 @@ else if (iguales(linea, "uptime")) {
     imprimir("\n");
 }
 
+else if (iguales(linea, "memmap")) {
+    imprimir("=== MAPA DE MEMORIA FISICA ===\n");
+
+    if (!memory_map_available()) {
+        imprimir("Mapa Multiboot no disponible.\n");
+    } else {
+
+        imprimir("Regiones detectadas: ");
+        imprimir_numero(memory_map_regions());
+        imprimir("\n");
+
+        imprimir("RAM utilizable reportada: ");
+        imprimir_numero(memory_map_usable_mib());
+        
+imprimir("\n=== REGIONES ===\n");
+
+for (uint32_t i = 0;
+     i < memory_map_regions();
+     i++) {
+
+    MemoryRegionInfo region;
+
+    if (memory_map_get_region(i, &region) != 0) {
+        imprimir("Error al leer region.\n");
+        break;
+    }
+
+    imprimir("Region ");
+    imprimir_numero(i);
+    imprimir("\n");
+
+    imprimir("  Inicio: ");
+    imprimir_hex32((uint32_t)(region.base >> 32));
+    imprimir_hex32((uint32_t)region.base);
+    imprimir("\n");
+
+    imprimir("  Tamano: ");
+    imprimir_hex32((uint32_t)(region.length >> 32));
+    imprimir_hex32((uint32_t)region.length);
+    imprimir("\n");
+
+    imprimir("  Tipo: ");
+
+    if (region.type == 1)
+        imprimir("Utilizable\n");
+    else
+        imprimir("Reservada u otro tipo\n");
+}
+
+        imprimir(" MiB\n");
+
+        imprimir("Asignador fisico: pendiente\n");
+    }
+}
+else if (iguales(linea, "memdebug")) {
+    imprimir("=== DIAGNOSTICO DE MEMORIA ===\n");
+
+    imprimir("Kernel inicio: ");
+    imprimir_hex32((uint32_t)(uintptr_t)__kernel_start);
+    imprimir("\n");
+
+    imprimir("Kernel fin: ");
+    imprimir_hex32((uint32_t)(uintptr_t)__kernel_end);
+    imprimir("\n");
+
+    imprimir("Mapa Multiboot inicio: ");
+    imprimir_hex32(mios_mmap_start);
+    imprimir("\n");
+
+    imprimir("Mapa Multiboot longitud: ");
+    imprimir_numero(mios_mmap_length);
+    imprimir(" bytes\n");
+}
+
+else if (iguales(linea, "bootinfo")) {
+    imprimir("=== INFORMACION MULTIBOOT ===\n");
+
+    if (mbi_saved_address == 0 ||
+        !memory_map_available()) {
+        imprimir("Informacion no disponible.\n");
+    } else {
+        const uint32_t *mbi =
+            (const uint32_t *)(uintptr_t)mbi_saved_address;
+
+        uint32_t flags = mbi[0];
+
+        imprimir("Direccion Multiboot: ");
+        imprimir_hex32(mbi_saved_address);
+        imprimir("\n");
+
+        imprimir("Flags: ");
+        imprimir_hex32(flags);
+        imprimir("\n");
+
+        imprimir("Modulos cargados: ");
+
+        if (flags & (1U << 3)) {
+            imprimir_numero(mbi[5]);
+
+            imprimir("\nDireccion de modulos: ");
+            imprimir_hex32(mbi[6]);
+        } else {
+            imprimir("0 (sin lista de modulos)");
+        }
+
+        imprimir("\n");
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -590,7 +723,11 @@ else if (shift && mapa_shift[codigo]) {
     return c;
 }
 
-void kernel_main(void) {
+void kernel_main(uint32_t multiboot_magic,
+    uint32_t multiboot_info) {
+        mbi_saved_address = multiboot_info;
+            memory_map_init(multiboot_magic, multiboot_info);
+
     mios_fs_init();
     memory_init();
     thread_init();
