@@ -1,7 +1,9 @@
 #include <stdint.h>
 #include <stddef.h>
 #include "fs.h"
-
+#include "interrupts.h"
+#include "memory.h"
+static void imprimir_numero(uint32_t numero);
 #define VGA_WIDTH 80
 #define VGA_HEIGHT 25
 #define BUFFER_SIZE 128
@@ -132,15 +134,20 @@ static void ejecutar_comando(char *linea) {
     char path[PATH_SIZE];
     int result;
 
-    if (iguales(linea, "")) return;
-    else if (iguales(linea, "help")) {
-        imprimir("Comandos de MiOS:\n");
-        imprimir("help, clear, about, version, echo TEXTO\n");
-        imprimir("pwd, cd RUTA, ls [RUTA], tree [RUTA]\n");
-        imprimir("mkdir RUTA, touch RUTA, cat RUTA\n");
-        imprimir("write RUTA TEXTO, rm RUTA, rmdir RUTA\n");
-        imprimir("reboot\n");
-    } else if (iguales(linea, "clear")) limpiar_pantalla();
+  
+if (iguales(linea, "")) return;
+else if (iguales(linea, "help")) {
+    imprimir("Comandos de MiOS:\n");
+    imprimir("help, clear, about, version, echo TEXTO\n");
+    imprimir("pwd, cd RUTA, ls [RUTA], tree [RUTA]\n");
+    imprimir("mkdir RUTA, touch RUTA, cat RUTA\n");
+    imprimir("write RUTA TEXTO, rm RUTA, rmdir RUTA\n");
+    imprimir("reboot, ticks\n");
+    imprimir("meminfo, memtest\n");
+} else if (iguales(linea, "clear")) {
+    limpiar_pantalla();
+}
+
     else if (iguales(linea, "about")) {
         imprimir("MiOS: sistema operativo educativo.\n");
         imprimir("Arquitectura: x86 de 32 bits.\nSistema de archivos: persistente en disco ATA.\n");
@@ -196,6 +203,68 @@ static void ejecutar_comando(char *linea) {
             else error_fs(result);
         }
     } else if (iguales(linea, "reboot")) reiniciar();
+
+    else if (iguales(linea, "ticks")) {
+    imprimir("Ticks del sistema: ");
+    imprimir_numero(timer_get_ticks());
+    imprimir("\n");
+      }
+    
+else if (iguales(linea, "meminfo")) {
+    imprimir("=== MEMORIA DE MIOS ===\n");
+
+    imprimir("Paginas totales: ");
+    imprimir_numero(memory_total_pages());
+    imprimir("\n");
+
+    imprimir("Paginas ocupadas: ");
+    imprimir_numero(memory_used_pages());
+    imprimir("\n");
+
+    imprimir("Paginas libres: ");
+    imprimir_numero(memory_free_pages());
+    imprimir("\n");
+
+    imprimir("Tamano por pagina: 4096 bytes\n");
+}
+else if (iguales(linea, "memtest")) {
+    imprimir("Probando administrador de memoria...\n");
+
+    void *pagina1 = memory_alloc_page();
+    void *pagina2 = memory_alloc_page();
+
+    if (pagina1 == NULL || pagina2 == NULL) {
+        imprimir("ERROR: no hay memoria suficiente.\n");
+
+        if (pagina1 != NULL)
+            memory_free_page(pagina1);
+
+        if (pagina2 != NULL)
+            memory_free_page(pagina2);
+    } else {
+        imprimir("Dos paginas reservadas correctamente.\n");
+
+        imprimir("Paginas ocupadas: ");
+        imprimir_numero(memory_used_pages());
+        imprimir("\n");
+
+        /* Escribir y comprobar datos reales */
+        uint8_t *datos = (uint8_t *)pagina1;
+        datos[0] = 42;
+        datos[4095] = 99;
+
+        if (datos[0] == 42 && datos[4095] == 99)
+            imprimir("Lectura y escritura: OK\n");
+        else
+            imprimir("ERROR: datos incorrectos.\n");
+
+        memory_free_page(pagina1);
+        memory_free_page(pagina2);
+
+        imprimir("Paginas liberadas.\n");
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -210,7 +279,7 @@ static const char mapa_normal[128] = {
     [0x0A]='9', [0x0B]='0',
 
     [0x0C]='\'',
-    [0x0D]='¡',
+ [0x0D] = (char)0xAD,  /* ¡ */
 
     [0x10]='q', [0x11]='w', [0x12]='e',
     [0x13]='r', [0x14]='t', [0x15]='y',
@@ -223,12 +292,11 @@ static const char mapa_normal[128] = {
     [0x1E]='a', [0x1F]='s', [0x20]='d',
     [0x21]='f', [0x22]='g', [0x23]='h',
     [0x24]='j', [0x25]='k', [0x26]='l',
-
-    [0x27]=';', /* ñ: requiere soporte de codificación */
+  /* ñ *//* ñ: requiere soporte de codificación */
     [0x28]='\'',
-    [0x29]='º',
-    [0x2B]='ç',
-
+[0x29] = (char)0xA7,  /* º */
+[0x2B] = (char)0x87,  /* ç */
+[0x27]=0xA4,  /* ñ */
     [0x2C]='z', [0x2D]='x', [0x2E]='c',
     [0x2F]='v', [0x30]='b', [0x31]='n',
     [0x32]='m',
@@ -253,16 +321,16 @@ static const char mapa_shift[128] = {
     [0x0B]='=',
 
     [0x0C]='?',
-    [0x0D]='¿',
+   
 
     [0x1A]='^',
     [0x1B]='*',
 
     [0x27]=':', /* Ñ: requiere soporte de codificación */
     [0x28]='"',
-    [0x29]='ª',
-    [0x2B]='Ç',
-
+    [0x0D] = (char)0xA8,  /* ¿ */
+[0x29] = (char)0xA6,  /* ª */
+[0x2B] = (char)0x80,  /* Ç */
     [0x33]=';',
     [0x34]=':',
     [0x35]='_',
@@ -273,19 +341,32 @@ static char traducir_tecla(uint8_t codigo, int shift, int caps) {
     char c = mapa_normal[codigo];
     if (!c) return 0;
 
-    if (c >= 'a' && c <= 'z') {
-        if (shift ^ caps) c = (char)(c - 'a' + 'A');
-    } else if (shift && mapa_shift[codigo]) {
-        c = mapa_shift[codigo];
-    }
+    if (codigo == 0x27) {
+    c = (shift ^ caps) ? mapa_shift[codigo] : mapa_normal[codigo];
+}
+if (c >= 'a' && c <= 'z') {
+    if (shift ^ caps)
+        c = (char)(c - 'a' + 'A');
+}
+else if ((uint8_t)c == 0xA4) {
+    if (shift ^ caps)
+        c = (char)0xA5;
+}
+else if (shift && mapa_shift[codigo]) {
+    c = mapa_shift[codigo];
+}
+else if (shift && mapa_shift[codigo]) {
+    c = mapa_shift[codigo];
+}
     return c;
 }
 
 void kernel_main(void) {
     mios_fs_init();
+    memory_init();
     color = 0x0F;
     limpiar_pantalla();
-
+ interrupts_init();
     color = 0x0A;
     imprimir("================================\n");
     imprimir("MIOS - SISTEMA OPERATIVO v0.5\n");
@@ -338,3 +419,22 @@ void kernel_main(void) {
         }
     }
 }
+static void imprimir_numero(uint32_t numero) {
+    char buffer[11];
+    int i = 0;
+
+    if (numero == 0) {
+        poner_caracter('0');
+        return;
+    }
+
+    while (numero > 0) {
+        buffer[i++] = '0' + (numero % 10);
+        numero /= 10;
+    }
+
+    while (i > 0) {
+        poner_caracter(buffer[--i]);
+    }
+}
+static void imprimir_numero(uint32_t numero);
