@@ -3,7 +3,7 @@
 #include <stddef.h>
 #include "thread.h"
 #include "memory.h"
-
+#include "irq.h"
 #define THREAD_FREE  0
 #define THREAD_READY 1
 #define THREAD_DONE  2
@@ -286,4 +286,47 @@ uint32_t thread_count(void) {
     }
 
     return count;
+}
+
+/*
+ * Cancela un hilo pendiente de ejecucion.
+ *
+ * No permite destruir hilos mientras
+ * el planificador esta ejecutandose.
+ */
+int thread_destroy(int tid) {
+    uint32_t flags = irq_save();
+
+    if (tid < 0 ||
+        tid >= MIOS_MAX_THREADS ||
+        scheduler_running ||
+        threads[tid].state != THREAD_READY) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    void *stack = threads[tid].stack;
+
+    if (stack == NULL) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Si la liberacion falla, conservamos
+     * el descriptor para no perder la pila.
+     */
+    if (memory_free_page(stack) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    threads[tid].esp = 0;
+    threads[tid].function = NULL;
+    threads[tid].stack = NULL;
+    threads[tid].state = THREAD_FREE;
+
+    irq_restore(flags);
+    return 0;
 }

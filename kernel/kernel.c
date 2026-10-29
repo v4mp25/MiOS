@@ -350,6 +350,7 @@ else if (iguales(linea, "help")) {
     imprimir("pmmownership\n");
     imprimir("irqtest\n");
     imprimir("pmmconcurrent\n");
+    imprimir("threadcleanup\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -478,22 +479,36 @@ else if (iguales(linea, "memtest")) {
 else if (iguales(linea, "threadtest")) {
     imprimir("Creando dos hilos...\n\n");
 
-    int hilo1 = thread_create(tarea_hilo_1);
-    int hilo2 = thread_create(tarea_hilo_2);
 
-    if (hilo1 < 0 || hilo2 < 0) {
-        imprimir("Error: no se pudieron crear hilos.\n");
-    } else {
-        imprimir("Hilos creados: ");
-        imprimir_numero(thread_count());
-        imprimir("\n\n");
+int hilo1 = thread_create(tarea_hilo_1);
+int hilo2 = thread_create(tarea_hilo_2);
 
-        if (thread_run() == 0) {
-            imprimir("\nAmbos hilos finalizaron.\n");
-        } else {
-            imprimir("Error al ejecutar hilos.\n");
+if (hilo1 < 0 || hilo2 < 0) {
+    imprimir("ERROR: no se pudieron crear hilos.\n");
+
+    if (hilo1 >= 0) {
+        if (thread_destroy(hilo1) != 0) {
+            imprimir("ERROR: limpieza del hilo 1.\n");
         }
     }
+
+    if (hilo2 >= 0) {
+        if (thread_destroy(hilo2) != 0) {
+            imprimir("ERROR: limpieza del hilo 2.\n");
+        }
+    }
+} else {
+    imprimir("Hilos creados: ");
+    imprimir_numero(thread_count());
+    imprimir("\n");
+
+    if (thread_run() == 0) {
+        imprimir("Ambos hilos finalizaron.\n");
+    } else {
+        imprimir("ERROR al ejecutar los hilos.\n");
+    }
+}
+
 }
 
 else if (iguales(linea, "schedtest")) {
@@ -1533,6 +1548,32 @@ else if (iguales(linea, "pmmconcurrent")) {
             imprimir("PMM CONCURRENT: OK\n");
         } else {
             imprimir("PMM CONCURRENT: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "threadcleanup")) {
+    imprimir("=== PRUEBA DE LIMPIEZA DE HILOS ===\n");
+
+    uint32_t libres_antes = memory_free_pages();
+    uint32_t hilos_antes = thread_count();
+
+    int tid = thread_create(pmm_concurrent_task1);
+
+    if (tid < 0) {
+        imprimir("ERROR: no se pudo crear el hilo.\n");
+    } else {
+        imprimir("Hilo creado.\n");
+
+        if (thread_destroy(tid) == 0 &&
+            memory_free_pages() == libres_antes &&
+            thread_count() == hilos_antes) {
+
+            imprimir("Pila liberada: OK\n");
+            imprimir("Descriptor recuperado: OK\n");
+            imprimir("THREAD CLEANUP: OK\n");
+        } else {
+            imprimir("THREAD CLEANUP: ERROR\n");
         }
     }
 }
