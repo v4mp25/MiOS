@@ -48,7 +48,7 @@ process.o: kernel/process.c include/process.h include/thread.h
 	$(CC) $(CFLAGS) -c kernel/process.c -o process.o
 pmm.o: kernel/pmm.c include/pmm.h include/memory_map.h
 	$(CC) $(CFLAGS) -c kernel/pmm.c -o pmm.o
-paging.o: kernel/paging.c include/paging.h
+paging.o: kernel/paging.c include/paging.h include/pmm.h include/irq.h
 	$(CC) $(CFLAGS) -c kernel/paging.c -o paging.o
 interrupts_c.o: kernel/interrupts.c include/interrupts.h
 	$(CC) $(CFLAGS) -c kernel/interrupts.c -o interrupts_c.o

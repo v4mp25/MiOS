@@ -2,6 +2,7 @@
 #include <stdint.h>
 #include "paging.h"
 #include "pmm.h"
+#include "irq.h"
 /*
  * MiOS - Preparacion de paginacion x86
  *
@@ -275,69 +276,81 @@ static void paging_flush_tlb(void) {
     );
 }
 
+
 int paging_test_map(uint32_t physical_frame) {
-    if (!initialized || !paging_cpu_enabled())
-        return -1;
+    uint32_t flags = irq_save();
 
-    if (test_page_mapped)
-        return -1;
+    if (!initialized ||
+        !paging_cpu_enabled() ||
+        test_page_mapped ||
+        (physical_frame & 0xFFFU) != 0 ||
+        physical_frame < 0x00400000U ||
+        physical_frame >= PHYSICAL_LIMIT ||
+        page_directory[TEST_DIRECTORY_INDEX] != 0 ||
+        !pmm_frame_allocated(physical_frame)) {
 
-    if ((physical_frame & 0xFFFU) != 0)
+        irq_restore(flags);
         return -1;
-
-    /* El marco debe estar dentro de la RAM
-       que esta implementacion administra. */
-    if (physical_frame < 0x00400000U ||
-        physical_frame >= PHYSICAL_LIMIT)
-        return -1;
-
-    if (page_directory[TEST_DIRECTORY_INDEX] != 0)
-        return -1;
+    }
 
     for (uint32_t i = 0; i < 1024; i++) {
         test_page_table[i] = 0;
     }
-if (pmm_pin_frame(physical_frame) != 0)
-    return -1;
-    /* Primera entrada de la tabla */
+
+    if (pmm_pin_frame(physical_frame) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
     test_page_table[0] =
         physical_frame | PAGE_PRESENT | PAGE_WRITE;
 
-    /* Registrar la tabla en el directorio */
     page_directory[TEST_DIRECTORY_INDEX] =
         ((uint32_t)(uintptr_t)&test_page_table[0])
         | PAGE_PRESENT | PAGE_WRITE;
 
     paging_flush_tlb();
-
     test_page_mapped = 1;
 
+    irq_restore(flags);
     return 0;
 }
 
+
+
 int paging_test_unmap(void) {
-    if (!initialized || !paging_cpu_enabled())
+    uint32_t flags = irq_save();
+
+    if (!initialized ||
+        !paging_cpu_enabled() ||
+        !test_page_mapped ||
+        !(test_page_table[0] & PAGE_PRESENT)) {
+
+        irq_restore(flags);
         return -1;
+    }
 
-    if (!test_page_mapped)
+    uint32_t physical_frame =
+        test_page_table[0] & 0xFFFFF000U;
+
+    if (pmm_frame_pin_count(physical_frame) == 0) {
+        irq_restore(flags);
         return -1;
+    }
 
-    /* Retirar primero la pagina */
-   
-uint32_t physical_frame =
-    test_page_table[0] & 0xFFFFF000U;
-
-if (pmm_unpin_frame(physical_frame) != 0)
-    return -1;
-    /* Retirar tambien la tabla del directorio */
+    test_page_table[0] = 0;
     page_directory[TEST_DIRECTORY_INDEX] = 0;
 
     paging_flush_tlb();
 
     test_page_mapped = 0;
 
-    return 0;
+    int result = pmm_unpin_frame(physical_frame);
+
+    irq_restore(flags);
+    return result;
 }
+
 
 /*
  * MiOS - VMM experimental de cuatro paginas.
@@ -391,81 +404,103 @@ static void vmm_invalidate(uint32_t address) {
 }
 
 /* Mapear una de las cuatro paginas */
-int vmm_map_page(
-    uint32_t index,
-    uint32_t physical_frame
-) {
-    if (index >= MIOS_VMM_PAGES)
-        return -1;
 
-    if ((physical_frame & 0xFFFU) != 0)
-        return -1;
+int vmm_map_page(uint32_t index, uint32_t physical_frame) {
+    uint32_t flags = irq_save();
 
-    if (physical_frame < 0x00400000U ||
-        physical_frame >= 128U * 1024U * 1024U)
-        return -1;
+    if (!initialized ||
+        !paging_cpu_enabled() ||
+        index >= MIOS_VMM_PAGES ||
+        (physical_frame & 0xFFFU) != 0 ||
+        physical_frame < 0x00400000U ||
+        physical_frame >= 128U * 1024U * 1024U) {
 
-    /* Exigir un marco realmente reservado */
-    if (!pmm_frame_allocated(physical_frame))
+        irq_restore(flags);
         return -1;
+    }
 
-    /*
-     * Impedir que dos paginas de esta region
-     * compartan accidentalmente el mismo marco.
-     */
+    if (!pmm_frame_allocated(physical_frame)) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    if (vmm_prepare() != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    if (vmm_table[index] & PAGE_PRESENT) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Impedir duplicados en nuestra region VMM */
     for (uint32_t i = 0; i < MIOS_VMM_PAGES; i++) {
-        if (vmm_page_mapped(i) &&
-            (vmm_table[i] & 0xFFFFF000U)
-                == physical_frame) {
+        if ((vmm_table[i] & PAGE_PRESENT) &&
+            (vmm_table[i] & 0xFFFFF000U) == physical_frame) {
+
+            irq_restore(flags);
             return -1;
         }
     }
 
-    if (vmm_prepare() != 0)
+    /* Registrar la referencia del marco */
+    if (pmm_pin_frame(physical_frame) != 0) {
+        irq_restore(flags);
         return -1;
+    }
 
-    if (vmm_table[index] & PAGE_PRESENT)
-        return -1;
-/* Registrar el mapeo antes de hacerlo visible */
-if (pmm_pin_frame(physical_frame) != 0)
-    return -1;
+    /* Crear el mapeo virtual */
     vmm_table[index] =
         physical_frame | PAGE_PRESENT | PAGE_WRITE;
 
-    vmm_invalidate(
-        MIOS_VMM_BASE + index * PAGE_SIZE
-    );
+    /* Invalidar la traduccion anterior */
+    vmm_invalidate(MIOS_VMM_BASE + index * PAGE_SIZE);
 
+    irq_restore(flags);
     return 0;
 }
 
+
 /* Retirar un mapeo sin liberar su marco fisico */
 
-int vmm_unmap_page(uint32_t index) {
-    if (!paging_cpu_enabled() ||
-        !vmm_initialized ||
-        index >= MIOS_VMM_PAGES)
-        return -1;
 
-    if (!(vmm_table[index] & PAGE_PRESENT))
+int vmm_unmap_page(uint32_t index) {
+    uint32_t flags = irq_save();
+
+    if (!initialized ||
+        !paging_cpu_enabled() ||
+        !vmm_initialized ||
+        index >= MIOS_VMM_PAGES) {
+
+        irq_restore(flags);
         return -1;
+    }
+
+    if (!(vmm_table[index] & PAGE_PRESENT)) {
+        irq_restore(flags);
+        return -1;
+    }
 
     uint32_t physical_frame =
         vmm_table[index] & 0xFFFFF000U;
 
-    /* Verificar y retirar referencia */
-    if (pmm_unpin_frame(physical_frame) != 0)
+    if (pmm_frame_pin_count(physical_frame) == 0) {
+        irq_restore(flags);
         return -1;
+    }
 
-    /* Eliminar la asociacion virtual */
+    /* Retirar el mapeo antes de liberar su referencia */
     vmm_table[index] = 0;
 
-    vmm_invalidate(
-        MIOS_VMM_BASE + index * PAGE_SIZE
-    );
+    vmm_invalidate(MIOS_VMM_BASE + index * PAGE_SIZE);
 
-    return 0;
+    int result = pmm_unpin_frame(physical_frame);
+
+    irq_restore(flags);
+    return result;
 }
+
 
 /* Consultar si una pagina esta mapeada */
 int vmm_page_mapped(uint32_t index) {
@@ -523,23 +558,27 @@ int paging_enable_write_protect(void) {
  *
  * Se utiliza la region experimental VMM.
  */
+
 int vmm_set_writable(uint32_t index, int writable) {
+    uint32_t flags = irq_save();
+
     if (!paging_cpu_enabled() ||
         !vmm_initialized ||
-        index >= MIOS_VMM_PAGES)
-        return -1;
+        index >= MIOS_VMM_PAGES ||
+        !(vmm_table[index] & PAGE_PRESENT)) {
 
-    if (!(vmm_table[index] & PAGE_PRESENT))
+        irq_restore(flags);
         return -1;
+    }
 
-    if (writable)
+    if (writable) {
         vmm_table[index] |= PAGE_WRITE;
-    else
+    } else {
         vmm_table[index] &= ~PAGE_WRITE;
+    }
 
-    vmm_invalidate(
-        MIOS_VMM_BASE + index * PAGE_SIZE
-    );
+    vmm_invalidate(MIOS_VMM_BASE + index * PAGE_SIZE);
 
+    irq_restore(flags);
     return 0;
 }
