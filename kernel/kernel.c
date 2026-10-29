@@ -7,6 +7,7 @@
 #include "memory_map.h"
 #include "process.h"
 #include "pmm.h"
+#include "paging.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -248,6 +249,7 @@ else if (iguales(linea, "help")) {
     imprimir("pmmvalidate\n");
     imprimir("bootrefs\n");
     imprimir("bootvalidate\n");
+    imprimir("paginginfo\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -874,6 +876,38 @@ else if (iguales(linea, "bootvalidate")) {
 }
 
 
+else if (iguales(linea, "paginginfo")) {
+    imprimir("=== PAGINACION DE MIOS ===\n");
+
+    if (!paging_ready()) {
+        imprimir("Tablas no preparadas.\n");
+    } else {
+        imprimir("Tablas de paginas: 32\n");
+
+        imprimir("Espacio mapeado: ");
+        imprimir_numero(paging_mapped_mib());
+        imprimir(" MiB\n");
+
+        imprimir("Directorio en: ");
+        imprimir_hex32(paging_directory_address());
+        imprimir("\n");
+
+        imprimir("Kernel: ");
+        imprimir(
+            paging_is_mapped(0x00100000U)
+            ? "MAPEADO\n" : "NO MAPEADO\n"
+        );
+
+        imprimir("VGA: ");
+        imprimir(
+            paging_is_mapped(0x000B8000U)
+            ? "MAPEADO\n" : "NO MAPEADO\n"
+        );
+
+        imprimir("Paginacion CPU: NO ACTIVADA\n");
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -976,7 +1010,7 @@ void kernel_main(uint32_t multiboot_magic,
             memory_map_init(multiboot_magic, multiboot_info);
             int pmm_status = pmm_init();
 (void)pmm_status;
-
+paging_init();
     mios_fs_init();
     memory_init();
     thread_init();
