@@ -4,6 +4,7 @@
 #include "interrupts.h"
 #include "memory.h"
 #include "thread.h"
+#include "process.h"
 static void imprimir_numero(uint32_t numero);
 #define VGA_WIDTH 80
 #define VGA_HEIGHT 25
@@ -172,6 +173,26 @@ static void sched_tarea2(void) {
     prueba_hilo2_ejecutado = 1;
 }
 
+static volatile uint32_t proceso_b_ejecuto = 0;
+static volatile uint32_t proceso_a_observo_b = 0;
+
+static void tarea_proceso_a(void) {
+    uint32_t inicio = timer_get_ticks();
+
+    /* Espera sin llamar a thread_yield */
+    while (!proceso_b_ejecuto &&
+           (uint32_t)(timer_get_ticks() - inicio) < 200U) {
+        __asm__ volatile ("" ::: "memory");
+    }
+
+    if (proceso_b_ejecuto)
+        proceso_a_observo_b = 1;
+}
+
+static void tarea_proceso_b(void) {
+    proceso_b_ejecuto = 1;
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -194,6 +215,7 @@ else if (iguales(linea, "help")) {
     imprimir("testexception\n");
     imprimir("threadtest\n");
     imprimir("schedtest\n");
+    imprimir("ps, proctest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -363,6 +385,88 @@ else if (iguales(linea, "schedtest")) {
     }
 }
 
+else if (iguales(linea, "ps")) {
+    imprimir("PID   NOMBRE   ESTADO\n");
+
+    for (uint32_t i = 0;
+         i < MIOS_MAX_PROCESSES;
+         i++) {
+
+        ProcessInfo p;
+
+        if (process_get_info(i, &p) != 0)
+            continue;
+
+        if (p.state == PROCESS_FREE)
+            continue;
+
+        imprimir_numero(p.pid);
+        imprimir("     ");
+        imprimir(p.name);
+        imprimir("   ");
+
+        switch (p.state) {
+            case PROCESS_READY:
+                imprimir("LISTO");
+                break;
+            case PROCESS_RUNNING:
+                imprimir("EJECUTANDO");
+                break;
+            case PROCESS_TERMINATED:
+                imprimir("TERMINADO");
+                break;
+            default:
+                imprimir("DESCONOCIDO");
+                break;
+        }
+
+        imprimir("\n");
+    }
+}
+
+else if (iguales(linea, "proctest")) {
+    process_init();
+
+    proceso_b_ejecuto = 0;
+    proceso_a_observo_b = 0;
+
+    imprimir("Creando procesos...\n");
+
+    int a = process_create(
+        "proceso_a",
+        tarea_proceso_a
+    );
+
+    int b = process_create(
+        "proceso_b",
+        tarea_proceso_b
+    );
+
+    if (a < 0 || b < 0) {
+        imprimir("Error al crear procesos.\n");
+    } else {
+        imprimir("PID del proceso A: ");
+        imprimir_numero((uint32_t)a);
+        imprimir("\n");
+
+        imprimir("PID del proceso B: ");
+        imprimir_numero((uint32_t)b);
+        imprimir("\n");
+
+        imprimir("Ejecutando tareas...\n");
+
+        int resultado = process_run();
+
+        if (resultado == 0 &&
+            proceso_a_observo_b) {
+            imprimir("Procesos ejecutados.\n");
+            imprimir("Round Robin: OK\n");
+        } else {
+            imprimir("Error en la prueba.\n");
+        }
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -463,6 +567,7 @@ void kernel_main(void) {
     mios_fs_init();
     memory_init();
     thread_init();
+    process_init();
     color = 0x0F;
     limpiar_pantalla();
  interrupts_init();
