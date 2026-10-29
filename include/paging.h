@@ -18,5 +18,13 @@ int paging_enable(void);
 
 /* Consultar el bit PG del registro CR0 */
 int paging_cpu_enabled(void);
+
+/* Direccion virtual reservada para pruebas */
+#define MIOS_TEST_VADDR 0x10000000U
+
+/* Asociar y retirar una pagina de prueba */
+int paging_test_map(uint32_t physical_frame);
+int paging_test_unmap(void);
+
 #endif
 

@@ -240,3 +240,96 @@ int paging_enable(void) {
 
     return paging_cpu_enabled() ? 0 : -1;
 }
+
+/*
+ * MiOS - Primer mapeo virtual dinamico.
+ *
+ * Utiliza una tabla reservada exclusivamente
+ * para la direccion virtual 0x10000000.
+ *
+ * No modifica el mapeo original de 128 MiB.
+ */
+
+#define TEST_DIRECTORY_INDEX 64U
+#define PHYSICAL_LIMIT (128U * 1024U * 1024U)
+
+static uint32_t test_page_table[1024]
+    __attribute__((aligned(4096)));
+
+static int test_page_mapped = 0;
+
+/* Recargar CR3 para invalidar traducciones */
+static void paging_flush_tlb(void) {
+    uint32_t cr3;
+
+    __asm__ volatile (
+        "mov %%cr3, %0"
+        : "=r"(cr3)
+    );
+
+    __asm__ volatile (
+        "mov %0, %%cr3"
+        :
+        : "r"(cr3)
+        : "memory"
+    );
+}
+
+int paging_test_map(uint32_t physical_frame) {
+    if (!initialized || !paging_cpu_enabled())
+        return -1;
+
+    if (test_page_mapped)
+        return -1;
+
+    if ((physical_frame & 0xFFFU) != 0)
+        return -1;
+
+    /* El marco debe estar dentro de la RAM
+       que esta implementacion administra. */
+    if (physical_frame < 0x00400000U ||
+        physical_frame >= PHYSICAL_LIMIT)
+        return -1;
+
+    if (page_directory[TEST_DIRECTORY_INDEX] != 0)
+        return -1;
+
+    for (uint32_t i = 0; i < 1024; i++) {
+        test_page_table[i] = 0;
+    }
+
+    /* Primera entrada de la tabla */
+    test_page_table[0] =
+        physical_frame | PAGE_PRESENT | PAGE_WRITE;
+
+    /* Registrar la tabla en el directorio */
+    page_directory[TEST_DIRECTORY_INDEX] =
+        ((uint32_t)(uintptr_t)&test_page_table[0])
+        | PAGE_PRESENT | PAGE_WRITE;
+
+    paging_flush_tlb();
+
+    test_page_mapped = 1;
+
+    return 0;
+}
+
+int paging_test_unmap(void) {
+    if (!initialized || !paging_cpu_enabled())
+        return -1;
+
+    if (!test_page_mapped)
+        return -1;
+
+    /* Retirar primero la pagina */
+    test_page_table[0] = 0;
+
+    /* Retirar tambien la tabla del directorio */
+    page_directory[TEST_DIRECTORY_INDEX] = 0;
+
+    paging_flush_tlb();
+
+    test_page_mapped = 0;
+
+    return 0;
+}

@@ -250,6 +250,7 @@ else if (iguales(linea, "help")) {
     imprimir("bootrefs\n");
     imprimir("bootvalidate\n");
     imprimir("paginginfo\n");
+    imprimir("vmmtest\n");
     imprimir("pagingon, pagingstatus\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
@@ -951,6 +952,65 @@ else if (iguales(linea, "pagefaulttest")) {
     }
 }
 
+
+else if (iguales(linea, "vmmtest")) {
+    imprimir("=== PRUEBA DE MEMORIA VIRTUAL ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("ERROR: ejecuta pagingon primero.\n");
+    } else {
+        uint32_t marco = 0;
+        uint32_t libres_antes = pmm_free_frames();
+
+        if (pmm_alloc_frame(&marco) != 0) {
+            imprimir("ERROR: no hay marcos libres.\n");
+        } else {
+            imprimir("Marco fisico: ");
+            imprimir_hex32(marco);
+            imprimir("\n");
+
+            if (paging_test_map(marco) != 0) {
+                imprimir("ERROR: no se pudo mapear.\n");
+                pmm_free_frame(marco);
+            } else {
+                imprimir("Direccion virtual: ");
+                imprimir_hex32(MIOS_TEST_VADDR);
+                imprimir("\n");
+
+                volatile uint32_t *virtual_ptr =
+                    (volatile uint32_t *)
+                    (uintptr_t)MIOS_TEST_VADDR;
+
+                /* Escritura real mediante MMU */
+                virtual_ptr[0] = 123456U;
+                virtual_ptr[1] = 789012U;
+
+                if (virtual_ptr[0] == 123456U &&
+                    virtual_ptr[1] == 789012U) {
+                    imprimir("Lectura y escritura: OK\n");
+                } else {
+                    imprimir("ERROR: datos incorrectos.\n");
+                }
+
+                /* Retirar mapeo antes de liberar */
+                if (paging_test_unmap() == 0)
+                    imprimir("Desmapeo: OK\n");
+                else
+                    imprimir("ERROR: desmapeo.\n");
+
+                if (pmm_free_frame(marco) == 0)
+                    imprimir("Marco liberado: OK\n");
+                else
+                    imprimir("ERROR: liberacion.\n");
+            }
+
+            if (pmm_free_frames() == libres_antes)
+                imprimir("Contabilidad PMM: OK\n");
+            else
+                imprimir("ERROR: diferencia de marcos.\n");
+        }
+    }
+}
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
