@@ -36,7 +36,7 @@ run: os.iso
 		-boot order=d \
 		-m 128M
 clean:
-	rm -f boot.o kernel.o fs.o kernel.bin os.iso ata.o
+	rm -f boot.o kernel.o fs.o kernel.bin os.iso ata.o memory.o
 	rm -rf iso/boot
 interrupts.o: boot/interrupts.asm
 	$(ASM) -f elf32 boot/interrupts.asm -o interrupts.o
