@@ -458,3 +458,71 @@ int vmm_page_mapped(uint32_t index) {
 
     return (vmm_table[index] & PAGE_PRESENT) != 0;
 }
+
+/*
+ * MiOS - Proteccion de paginas virtuales.
+ * Requiere paginacion activa.
+ */
+
+/* Comprobar CR0.WP: bit 16 */
+int paging_write_protect_enabled(void) {
+    uint32_t cr0;
+
+    __asm__ volatile (
+        "mov %%cr0, %0"
+        : "=r"(cr0)
+    );
+
+    return (cr0 & (1U << 16)) != 0;
+}
+
+/* Hacer que el kernel respete paginas de solo lectura */
+int paging_enable_write_protect(void) {
+    if (!paging_cpu_enabled())
+        return -1;
+
+    uint32_t cr0;
+
+    __asm__ volatile (
+        "mov %%cr0, %0"
+        : "=r"(cr0)
+    );
+
+    cr0 |= (1U << 16);
+
+    __asm__ volatile (
+        "mov %0, %%cr0"
+        :
+        : "r"(cr0)
+        : "memory"
+    );
+
+    return paging_write_protect_enabled() ? 0 : -1;
+}
+
+/*
+ * writable = 1: lectura y escritura
+ * writable = 0: solo lectura
+ *
+ * Se utiliza la region experimental VMM.
+ */
+int vmm_set_writable(uint32_t index, int writable) {
+    if (!paging_cpu_enabled() ||
+        !vmm_initialized ||
+        index >= MIOS_VMM_PAGES)
+        return -1;
+
+    if (!(vmm_table[index] & PAGE_PRESENT))
+        return -1;
+
+    if (writable)
+        vmm_table[index] |= PAGE_WRITE;
+    else
+        vmm_table[index] &= ~PAGE_WRITE;
+
+    vmm_invalidate(
+        MIOS_VMM_BASE + index * PAGE_SIZE
+    );
+
+    return 0;
+}

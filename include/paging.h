@@ -39,7 +39,12 @@ int vmm_unmap_page(uint32_t index);
 
 int vmm_page_mapped(uint32_t index);
 
+/* Cambiar permisos de una pagina VMM */
+int vmm_set_writable(uint32_t index, int writable);
 
+/* Activar proteccion de escritura del kernel */
+int paging_enable_write_protect(void);
+int paging_write_protect_enabled(void);
 
 #endif
 

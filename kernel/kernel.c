@@ -254,6 +254,8 @@ else if (iguales(linea, "help")) {
     imprimir("pagingon, pagingstatus\n");
     imprimir("vmmmulti\n");
     imprimir("vmmguard\n");
+    imprimir("vmmreadonly\n");
+    imprimir("vmmwritetest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1148,6 +1150,132 @@ else if (iguales(linea, "vmmguard")) {
             imprimir("VMM GUARD: OK\n");
         else
             imprimir("VMM GUARD: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "vmmreadonly")) {
+    imprimir("=== PRUEBA DE PERMISOS VMM ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("ERROR: primero ejecuta pagingon.\n");
+    } else if (paging_enable_write_protect() != 0) {
+        imprimir("ERROR: no se pudo activar CR0.WP.\n");
+    } else {
+        uint32_t marco = 0;
+        uint32_t libres_antes = pmm_free_frames();
+        int ok = 1;
+
+        if (vmm_page_mapped(0)) {
+            imprimir("ERROR: pagina 0 ya mapeada.\n");
+        } else if (pmm_alloc_frame(&marco) != 0) {
+            imprimir("ERROR: reserva PMM.\n");
+        } else {
+            if (vmm_map_page(0, marco) != 0) {
+                imprimir("ERROR: mapeo VMM.\n");
+                ok = 0;
+            } else {
+                volatile uint32_t *ptr =
+                    (volatile uint32_t *)(uintptr_t)
+                    MIOS_VMM_BASE;
+
+                /* Inicialmente es escritura permitida */
+                ptr[0] = 12345U;
+
+                if (ptr[0] != 12345U)
+                    ok = 0;
+
+                if (vmm_set_writable(0, 0) != 0) {
+                    ok = 0;
+                } else {
+                    imprimir("Pagina configurada: SOLO LECTURA\n");
+
+                    if (ptr[0] == 12345U)
+                        imprimir("Lectura protegida: OK\n");
+                    else
+                        ok = 0;
+                }
+
+                if (vmm_unmap_page(0) != 0)
+                    ok = 0;
+            }
+
+            if (pmm_free_frame(marco) != 0)
+                ok = 0;
+        }
+
+        if (pmm_free_frames() != libres_antes)
+            ok = 0;
+
+        if (ok && paging_write_protect_enabled())
+            imprimir("VMM READONLY: OK\n");
+        else
+            imprimir("VMM READONLY: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "vmmwritetest")) {
+    imprimir("=== PRUEBA DE PROTECCION VMM ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("ERROR: ejecuta pagingon primero.\n");
+    }
+    else if (paging_enable_write_protect() != 0) {
+        imprimir("ERROR: no se pudo activar CR0.WP.\n");
+    }
+    else if (vmm_page_mapped(0)) {
+        imprimir("ERROR: pagina virtual ocupada.\n");
+    }
+    else {
+        uint32_t marco = 0;
+
+        if (pmm_alloc_frame(&marco) != 0) {
+            imprimir("ERROR: no hay marcos libres.\n");
+        }
+        else if (vmm_map_page(0, marco) != 0) {
+            imprimir("ERROR: no se pudo mapear.\n");
+            pmm_free_frame(marco);
+        }
+        else {
+            volatile uint32_t *ptr =
+                (volatile uint32_t *)(uintptr_t)
+                MIOS_VMM_BASE;
+
+            /* Primero escribir con permiso */
+            ptr[0] = 12345U;
+
+            if (ptr[0] != 12345U) {
+                imprimir("ERROR: lectura inicial.\n");
+
+                if (vmm_unmap_page(0) == 0)
+                    pmm_free_frame(marco);
+            }
+            else if (vmm_set_writable(0, 0) != 0) {
+                imprimir("ERROR: cambiar permisos.\n");
+
+                if (vmm_unmap_page(0) == 0)
+                    pmm_free_frame(marco);
+            }
+            else {
+                imprimir("Pagina: SOLO LECTURA\n");
+                imprimir("CR0.WP: ACTIVADO\n");
+                imprimir("Intentando escritura prohibida...\n");
+
+                /*
+                 * Esta escritura debe provocar
+                 * Page Fault, vector 14.
+                 */
+                ptr[0] = 99999U;
+
+                /*
+                 * Si llega aqui, la proteccion
+                 * no funciono como esperabamos.
+                 */
+                imprimir("ERROR: escritura permitida.\n");
+
+                if (vmm_unmap_page(0) == 0)
+                    pmm_free_frame(marco);
+            }
+        }
     }
 }
 
