@@ -12,15 +12,16 @@ all: os.iso
 boot.o: boot/boot.asm
 	$(ASM) -f elf32 $< -o $@
 
-kernel.o: kernel/kernel.c include/fs.h
+kernel.o: kernel/kernel.c include/fs.h include/interrupts.h include/memory.h include/thread.h
 	$(CC) $(CFLAGS) -c kernel/kernel.c -o kernel.o
-
 fs.o: fs/fs.c include/fs.h
 	$(CC) $(CFLAGS) -c fs/fs.c -o fs.o
 memory.o: kernel/memory.c include/memory.h
 	$(CC) $(CFLAGS) -c kernel/memory.c -o memory.o
-kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o kernel/linker.ld
-	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o
+
+kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o thread.o thread_switch.o kernel/linker.ld
+	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o thread.o thread_switch.o
+
 os.iso: kernel.bin boot/grub/grub.cfg
 	mkdir -p iso/boot/grub
 	cp kernel.bin iso/boot/kernel.bin
@@ -36,11 +37,19 @@ run: os.iso
 		-boot order=d \
 		-m 128M
 clean:
-	rm -f boot.o kernel.o fs.o kernel.bin os.iso ata.o memory.o
+	rm -f boot.o kernel.o fs.o kernel.bin os.iso ata.o memory.o thread_switch.o thread.o
 	rm -rf iso/boot
+
 interrupts.o: boot/interrupts.asm
 	$(ASM) -f elf32 boot/interrupts.asm -o interrupts.o
 
 interrupts_c.o: kernel/interrupts.c include/interrupts.h
 	$(CC) $(CFLAGS) -c kernel/interrupts.c -o interrupts_c.o
+	
+thread.o: kernel/thread.c include/thread.h include/memory.h
+	$(CC) $(CFLAGS) -c kernel/thread.c -o thread.o
+
+thread_switch.o: boot/thread_switch.asm
+	$(ASM) -f elf32 boot/thread_switch.asm -o thread_switch.o
+
 .PHONY: all run clean

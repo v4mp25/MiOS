@@ -3,6 +3,7 @@
 #include "fs.h"
 #include "interrupts.h"
 #include "memory.h"
+#include "thread.h"
 static void imprimir_numero(uint32_t numero);
 #define VGA_WIDTH 80
 #define VGA_HEIGHT 25
@@ -125,6 +126,26 @@ static void reiniciar(void) {
     }
 }
 
+static void tarea_hilo_1(void) {
+    for (int i = 1; i <= 3; i++) {
+        imprimir("Hilo 1: trabajando (");
+        imprimir_numero((uint32_t)i);
+        imprimir(")\n");
+
+        thread_yield();
+    }
+}
+
+static void tarea_hilo_2(void) {
+    for (int i = 1; i <= 3; i++) {
+        imprimir("Hilo 2: trabajando (");
+        imprimir_numero((uint32_t)i);
+        imprimir(")\n");
+
+        thread_yield();
+    }
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -145,6 +166,7 @@ else if (iguales(linea, "help")) {
     imprimir("reboot, ticks\n");
     imprimir("meminfo, memtest\n");
     imprimir("testexception\n");
+    imprimir("threadtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -269,6 +291,28 @@ else if (iguales(linea, "memtest")) {
     imprimir("Probando excepcion de CPU...\n");
     __asm__ volatile ("int3");
 }
+
+else if (iguales(linea, "threadtest")) {
+    imprimir("Creando dos hilos...\n\n");
+
+    int hilo1 = thread_create(tarea_hilo_1);
+    int hilo2 = thread_create(tarea_hilo_2);
+
+    if (hilo1 < 0 || hilo2 < 0) {
+        imprimir("Error: no se pudieron crear hilos.\n");
+    } else {
+        imprimir("Hilos creados: ");
+        imprimir_numero(thread_count());
+        imprimir("\n\n");
+
+        if (thread_run() == 0) {
+            imprimir("\nAmbos hilos finalizaron.\n");
+        } else {
+            imprimir("Error al ejecutar hilos.\n");
+        }
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -368,6 +412,7 @@ else if (shift && mapa_shift[codigo]) {
 void kernel_main(void) {
     mios_fs_init();
     memory_init();
+    thread_init();
     color = 0x0F;
     limpiar_pantalla();
  interrupts_init();
