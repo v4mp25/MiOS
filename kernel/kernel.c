@@ -6,6 +6,7 @@
 #include "thread.h"
 #include "memory_map.h"
 #include "process.h"
+#include "pmm.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -241,6 +242,8 @@ else if (iguales(linea, "help")) {
     imprimir("memmap\n");
     imprimir("memdebug\n");
     imprimir("bootinfo\n");
+    imprimir("pmminfo, pmmtest\n");
+    imprimir("pmmstress\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -627,6 +630,125 @@ else if (iguales(linea, "bootinfo")) {
     }
 }
 
+else if (iguales(linea, "pmmtest")) {
+    imprimir("=== PRUEBA DE MEMORIA FISICA ===\n");
+
+    uint32_t antes = pmm_free_frames();
+    uint32_t a = 0;
+    uint32_t b = 0;
+
+    int resultado_a = pmm_alloc_frame(&a);
+    int resultado_b = pmm_alloc_frame(&b);
+
+    if (resultado_a != 0 || resultado_b != 0) {
+        imprimir("ERROR: no se pudieron reservar marcos.\n");
+
+        if (resultado_a == 0)
+            pmm_free_frame(a);
+
+        if (resultado_b == 0)
+            pmm_free_frame(b);
+    } else {
+        imprimir("Marco 1: ");
+        imprimir_hex32(a);
+        imprimir("\n");
+
+        imprimir("Marco 2: ");
+        imprimir_hex32(b);
+        imprimir("\n");
+
+        if (a != b &&
+            a >= 0x00400000U &&
+            b >= 0x00400000U &&
+            pmm_free_frames() == antes - 2U) {
+
+            imprimir("Reserva de marcos: OK\n");
+        } else {
+            imprimir("ERROR: reserva incorrecta.\n");
+        }
+
+        int libre_a = pmm_free_frame(a);
+        int libre_b = pmm_free_frame(b);
+
+        if (libre_a == 0 &&
+            libre_b == 0 &&
+            pmm_free_frames() == antes) {
+
+            imprimir("Liberacion: OK\n");
+        } else {
+            imprimir("ERROR: liberacion incorrecta.\n");
+        }
+
+        /* Una segunda liberacion debe fallar */
+        if (pmm_free_frame(a) != 0)
+            imprimir("Proteccion doble liberacion: OK\n");
+        else
+            imprimir("ERROR: doble liberacion permitida.\n");
+    }
+}
+
+else if (iguales(linea, "pmminfo")) {
+    imprimir("=== ADMINISTRADOR FISICO MIOS ===\n");
+
+    imprimir("Marcos administrables: ");
+    imprimir_numero(pmm_total_frames());
+    imprimir("\n");
+
+    imprimir("Marcos libres: ");
+    imprimir_numero(pmm_free_frames());
+    imprimir("\n");
+
+    imprimir("Marcos asignados: ");
+    imprimir_numero(pmm_used_frames());
+    imprimir("\n");
+
+    imprimir("Tamano de marco: 4096 bytes\n");
+}
+
+else if (iguales(linea, "pmmstress")) {
+    uint32_t marcos[16];
+    uint32_t cantidad = 0;
+    uint32_t libres_antes = pmm_free_frames();
+    int error = 0;
+
+    imprimir("=== PRUEBA PMM: 16 MARCOS ===\n");
+
+    for (uint32_t i = 0; i < 16; i++) {
+        if (pmm_alloc_frame(&marcos[i]) != 0) {
+            error = 1;
+            break;
+        }
+
+        for (uint32_t j = 0; j < cantidad; j++) {
+            if (marcos[j] == marcos[i])
+                error = 1;
+        }
+
+        cantidad++;
+    }
+
+    imprimir("Marcos reservados: ");
+    imprimir_numero(cantidad);
+    imprimir("\n");
+
+    imprimir("Marcos libres durante la prueba: ");
+    imprimir_numero(pmm_free_frames());
+    imprimir("\n");
+
+    for (uint32_t i = 0; i < cantidad; i++) {
+        if (pmm_free_frame(marcos[i]) != 0)
+            error = 1;
+    }
+
+    if (pmm_free_frames() != libres_antes)
+        error = 1;
+
+    if (error == 0 && cantidad == 16)
+        imprimir("PMM STRESS: OK\n");
+    else
+        imprimir("PMM STRESS: ERROR\n");
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -727,6 +849,8 @@ void kernel_main(uint32_t multiboot_magic,
     uint32_t multiboot_info) {
         mbi_saved_address = multiboot_info;
             memory_map_init(multiboot_magic, multiboot_info);
+            int pmm_status = pmm_init();
+(void)pmm_status;
 
     mios_fs_init();
     memory_init();
