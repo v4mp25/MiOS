@@ -144,6 +144,7 @@ else if (iguales(linea, "help")) {
     imprimir("write RUTA TEXTO, rm RUTA, rmdir RUTA\n");
     imprimir("reboot, ticks\n");
     imprimir("meminfo, memtest\n");
+    imprimir("testexception\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -264,7 +265,10 @@ else if (iguales(linea, "memtest")) {
         imprimir("Paginas liberadas.\n");
     }
 }
-
+    else if (iguales(linea, "testexception")) {
+    imprimir("Probando excepcion de CPU...\n");
+    __asm__ volatile ("int3");
+}
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;

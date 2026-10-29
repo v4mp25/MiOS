@@ -31,6 +31,7 @@ static idt_pointer_t idt_pointer;
 static volatile uint32_t timer_ticks = 0;
 
 extern void irq0_stub(void);
+extern void (*isr_stub_table[32])(void);
 
 static inline void outb(uint16_t port, uint8_t value) {
     __asm__ volatile (
@@ -108,6 +109,104 @@ uint32_t timer_get_ticks(void) {
     return timer_ticks;
 }
 
+/* Diagnostico de excepciones del procesador */
+
+static volatile uint16_t *const ERROR_VGA =
+    (volatile uint16_t *)0xB8000;
+
+static uint32_t error_cursor = 0;
+
+static void error_putc(char c) {
+    if (c == '\n') {
+        error_cursor =
+            ((error_cursor / 80) + 1) * 80;
+        return;
+    }
+
+    if (error_cursor < 80 * 25) {
+        ERROR_VGA[error_cursor++] =
+            ((uint16_t)0x0F << 8) |
+            (uint8_t)c;
+    }
+}
+
+static void error_print(const char *text) {
+    while (*text) {
+        error_putc(*text++);
+    }
+}
+
+static void error_hex(uint32_t value) {
+    const char *digits = "0123456789ABCDEF";
+
+    error_print("0x");
+
+    for (int shift = 28; shift >= 0; shift -= 4) {
+        error_putc(digits[(value >> shift) & 15]);
+    }
+}
+
+void exception_handler(const uint32_t *frame) {
+    __asm__ volatile ("cli");
+
+    uint32_t vector = frame[8];
+    uint32_t error_code = frame[9];
+    uint32_t eip = frame[10];
+
+    for (uint32_t i = 0; i < 80 * 25; i++) {
+        ERROR_VGA[i] = 0x0F20;
+    }
+
+    error_cursor = 0;
+
+    error_print("================================\n");
+    error_print("MIOS - ERROR DEL PROCESADOR\n");
+    error_print("================================\n\n");
+
+    error_print("Vector: ");
+    error_hex(vector);
+    error_print("\n");
+
+    error_print("Codigo de error: ");
+    error_hex(error_code);
+    error_print("\n");
+
+    error_print("Direccion EIP: ");
+    error_hex(eip);
+    error_print("\n\n");
+
+    switch (vector) {
+        case 0:
+            error_print("Division entre cero\n");
+            break;
+        case 3:
+            error_print("Punto de interrupcion (breakpoint)\n");
+            break;
+        case 6:
+            error_print("Instruccion invalida\n");
+            break;
+
+            case 8:
+            error_print("Double fault\n");
+            break;
+        case 13:
+            error_print("Fallo de proteccion general\n");
+            break;
+        case 14:
+            error_print("Fallo de pagina\n");
+            break;
+        default:
+            error_print("Excepcion del procesador\n");
+            break;
+    }
+
+    error_print("\nSistema detenido por seguridad.\n");
+
+    for (;;) {
+        __asm__ volatile ("hlt");
+    }
+}
+
 void interrupts_init(void) {
     __asm__ volatile ("cli");
 
@@ -118,7 +217,16 @@ void interrupts_init(void) {
         idt[i].attributes = 0;
         idt[i].offset_high = 0;
     }
+/* Registrar excepciones de CPU: vectores 0-31 */
+uint16_t selector = read_cs();
 
+for (uint32_t i = 0; i < 32; i++) {
+    idt_set_gate(
+        (uint8_t)i,
+        (uint32_t)isr_stub_table[i],
+        selector
+    );
+}
     idt_set_gate(
         32,
         (uint32_t)irq0_stub,
