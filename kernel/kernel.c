@@ -307,6 +307,85 @@ static void pmm_concurrent_task2(void) {
     pmm_concurrent_worker(1);
 }
 
+/* MiOS - Prueba concurrente del VMM */
+
+#define VMM_CONCURRENT_LOOPS 8U
+
+static volatile uint32_t vmm_done[2] = {0, 0};
+static volatile uint32_t vmm_errors[2] = {0, 0};
+static volatile uint32_t vmm_active[2] = {0, 0};
+static volatile uint32_t vmm_overlap = 0;
+
+static void vmm_concurrent_worker(uint32_t id) {
+    uint32_t other = 1U - id;
+
+    for (uint32_t i = 0; i < VMM_CONCURRENT_LOOPS; i++) {
+        uint32_t frame = 0;
+
+        if (pmm_alloc_frame(&frame) != 0) {
+            vmm_errors[id]++;
+            return;
+        }
+
+        if (vmm_map_page(id, frame) != 0) {
+            vmm_errors[id]++;
+            pmm_free_frame(frame);
+            return;
+        }
+
+        volatile uint32_t *ptr =
+            (volatile uint32_t *)(uintptr_t)
+            (MIOS_VMM_BASE + id * PAGE_SIZE);
+
+        uint32_t expected = 10000U * (id + 1U) + i;
+
+        /* Escritura real a traves de la MMU */
+        ptr[0] = expected;
+        ptr[1023] = ~expected;
+
+        vmm_active[id] = 1;
+
+        uint32_t start = timer_get_ticks();
+
+        /* Mantener la pagina activa durante 6 ticks */
+        while ((uint32_t)(timer_get_ticks() - start) < 6U) {
+            if (vmm_active[other])
+                vmm_overlap = 1;
+
+            __asm__ volatile ("" ::: "memory");
+        }
+
+        if (ptr[0] != expected ||
+            ptr[1023] != ~expected) {
+            vmm_errors[id]++;
+        }
+
+        vmm_active[id] = 0;
+
+        if (vmm_unmap_page(id) != 0) {
+            vmm_errors[id]++;
+            /* No liberar un marco cuyo mapeo
+               no pudo retirarse. */
+            return;
+        }
+
+        if (pmm_free_frame(frame) != 0) {
+            vmm_errors[id]++;
+            return;
+        }
+
+        vmm_done[id]++;
+    }
+}
+
+static void vmm_concurrent_task1(void) {
+    vmm_concurrent_worker(0);
+}
+
+static void vmm_concurrent_task2(void) {
+    vmm_concurrent_worker(1);
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -351,6 +430,7 @@ else if (iguales(linea, "help")) {
     imprimir("irqtest\n");
     imprimir("pmmconcurrent\n");
     imprimir("threadcleanup\n");
+    imprimir("vmmconcurrent\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1574,6 +1654,76 @@ else if (iguales(linea, "threadcleanup")) {
             imprimir("THREAD CLEANUP: OK\n");
         } else {
             imprimir("THREAD CLEANUP: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "vmmconcurrent")) {
+    imprimir("=== CONCURRENCIA DEL VMM ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("Primero ejecuta pagingon.\n");
+    }
+    else if (vmm_page_mapped(0) ||
+             vmm_page_mapped(1)) {
+        imprimir("ERROR: paginas de prueba ocupadas.\n");
+    }
+    else {
+        vmm_done[0] = vmm_done[1] = 0;
+        vmm_errors[0] = vmm_errors[1] = 0;
+        vmm_active[0] = vmm_active[1] = 0;
+        vmm_overlap = 0;
+
+        uint32_t before = pmm_free_frames();
+
+        int a = thread_create(vmm_concurrent_task1);
+        int b = thread_create(vmm_concurrent_task2);
+
+        if (a < 0 || b < 0) {
+            imprimir("ERROR: creacion de hilos.\n");
+
+            if (a >= 0)
+                thread_destroy(a);
+
+            if (b >= 0)
+                thread_destroy(b);
+        } else {
+            int result = thread_run();
+
+            imprimir("Operaciones hilo 1: ");
+            imprimir_numero(vmm_done[0]);
+            imprimir("\n");
+
+            imprimir("Operaciones hilo 2: ");
+            imprimir_numero(vmm_done[1]);
+            imprimir("\n");
+
+            imprimir("Errores hilo 1: ");
+            imprimir_numero(vmm_errors[0]);
+            imprimir("\n");
+
+            imprimir("Errores hilo 2: ");
+            imprimir_numero(vmm_errors[1]);
+            imprimir("\n");
+
+            int ok =
+                result == 0 &&
+                vmm_done[0] == VMM_CONCURRENT_LOOPS &&
+                vmm_done[1] == VMM_CONCURRENT_LOOPS &&
+                vmm_errors[0] == 0 &&
+                vmm_errors[1] == 0 &&
+                vmm_overlap != 0 &&
+                !vmm_page_mapped(0) &&
+                !vmm_page_mapped(1) &&
+                pmm_free_frames() == before;
+
+            if (ok) {
+                imprimir("Ejecucion superpuesta: OK\n");
+                imprimir("Mapeos y liberacion: OK\n");
+                imprimir("VMM CONCURRENT: OK\n");
+            } else {
+                imprimir("VMM CONCURRENT: ERROR\n");
+            }
         }
     }
 }
