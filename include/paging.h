@@ -45,6 +45,7 @@ int vmm_set_writable(uint32_t index, int writable);
 /* Activar proteccion de escritura del kernel */
 int paging_enable_write_protect(void);
 int paging_write_protect_enabled(void);
-
+/* Prueba de dos espacios de direcciones */
+int paging_address_spaces_test(void);
 #endif
 

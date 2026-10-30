@@ -582,3 +582,143 @@ int vmm_set_writable(uint32_t index, int writable) {
     irq_restore(flags);
     return 0;
 }
+
+/*
+ * MiOS - Prueba de espacios de direcciones.
+ *
+ * Crea dos directorios de paginas diferentes.
+ * Ambos comparten los primeros 128 MiB del
+ * kernel, pero tienen una pagina privada
+ * distinta en la direccion 0x10800000.
+ *
+ * NO modifica CR3.
+ */
+
+#define PRIVATE_PDE_INDEX 66U
+
+static void zero_page(uint32_t *page) {
+    for (uint32_t i = 0; i < 1024; i++) {
+        page[i] = 0;
+    }
+}
+
+int paging_address_spaces_test(void) {
+    if (!initialized || !paging_cpu_enabled())
+        return -1;
+
+    uint32_t frames[6] = {0};
+    uint32_t count = 0;
+    int result = -1;
+
+    /*
+     * Reservar:
+     * 0 = Directorio A
+     * 1 = Tabla privada A
+     * 2 = Marco de datos A
+     * 3 = Directorio B
+     * 4 = Tabla privada B
+     * 5 = Marco de datos B
+     */
+    for (uint32_t i = 0; i < 6; i++) {
+        if (pmm_alloc_frame(&frames[i]) != 0)
+            goto cleanup;
+
+        count++;
+    }
+
+    /*
+     * En MiOS los primeros 128 MiB tienen
+     * mapeo de identidad. Por eso podemos
+     * acceder a estos marcos por su direccion
+     * fisica mientras usamos el CR3 principal.
+     */
+    uint32_t *dir_a =
+        (uint32_t *)(uintptr_t)frames[0];
+
+    uint32_t *table_a =
+        (uint32_t *)(uintptr_t)frames[1];
+
+    uint32_t *dir_b =
+        (uint32_t *)(uintptr_t)frames[3];
+
+    uint32_t *table_b =
+        (uint32_t *)(uintptr_t)frames[4];
+
+    zero_page(dir_a);
+    zero_page(table_a);
+    zero_page(dir_b);
+    zero_page(table_b);
+
+    /*
+     * Compartir el mapeo del kernel.
+     * Por ahora son las entradas 0 a 31.
+     */
+    for (uint32_t i = 0; i < PAGE_TABLE_COUNT; i++) {
+        dir_a[i] = page_directory[i];
+        dir_b[i] = page_directory[i];
+    }
+
+    /*
+     * Misma direccion virtual, diferentes
+     * marcos fisicos.
+     *
+     * No habilitamos acceso Ring 3 aun.
+     */
+    table_a[0] =
+        frames[2] | PAGE_PRESENT | PAGE_WRITE;
+
+    table_b[0] =
+        frames[5] | PAGE_PRESENT | PAGE_WRITE;
+
+    dir_a[PRIVATE_PDE_INDEX] =
+        frames[1] | PAGE_PRESENT | PAGE_WRITE;
+
+    dir_b[PRIVATE_PDE_INDEX] =
+        frames[4] | PAGE_PRESENT | PAGE_WRITE;
+
+    /*
+     * Comprobaciones:
+     * - Directorios distintos.
+     * - Marcos privados distintos.
+     * - Entradas privadas presentes.
+     * - Kernel compartido.
+     */
+    if (frames[0] == frames[3] ||
+        frames[2] == frames[5])
+        goto cleanup;
+
+    if ((dir_a[PRIVATE_PDE_INDEX] & 0xFFFFF000U)
+            != frames[1])
+        goto cleanup;
+
+    if ((dir_b[PRIVATE_PDE_INDEX] & 0xFFFFF000U)
+            != frames[4])
+        goto cleanup;
+
+    if ((table_a[0] & 0xFFFFF000U) != frames[2])
+        goto cleanup;
+
+    if ((table_b[0] & 0xFFFFF000U) != frames[5])
+        goto cleanup;
+
+    for (uint32_t i = 0; i < PAGE_TABLE_COUNT; i++) {
+        if (dir_a[i] != page_directory[i] ||
+            dir_b[i] != page_directory[i])
+            goto cleanup;
+    }
+
+    result = 0;
+
+cleanup:
+    /*
+     * Nunca activamos estos directorios:
+     * podemos retirar la prueba y devolver
+     * sus marcos al PMM.
+     */
+    for (uint32_t i = 0; i < count; i++) {
+        if (pmm_free_frame(frames[i]) != 0)
+            result = -1;
+    }
+
+    return result;
+}

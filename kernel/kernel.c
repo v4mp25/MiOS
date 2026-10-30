@@ -431,6 +431,7 @@ else if (iguales(linea, "help")) {
     imprimir("pmmconcurrent\n");
     imprimir("threadcleanup\n");
     imprimir("vmmconcurrent\n");
+    imprimir("spacetest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1727,7 +1728,28 @@ else if (iguales(linea, "vmmconcurrent")) {
         }
     }
 }
+else if (iguales(linea, "spacetest")) {
+    imprimir("=== ESPACIOS DE DIRECCIONES ===\n");
 
+    if (!paging_cpu_enabled()) {
+        imprimir("Primero ejecuta pagingon.\n");
+    } else {
+        uint32_t antes = pmm_free_frames();
+
+        if (paging_address_spaces_test() == 0 &&
+            pmm_free_frames() == antes) {
+
+            imprimir("Directorio A: OK\n");
+            imprimir("Directorio B: OK\n");
+            imprimir("Kernel compartido: OK\n");
+            imprimir("Marcos privados distintos: OK\n");
+            imprimir("Liberacion de memoria: OK\n");
+            imprimir("SPACE TEST: OK\n");
+        } else {
+            imprimir("SPACE TEST: ERROR\n");
+        }
+    }
+}
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
