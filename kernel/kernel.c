@@ -12,6 +12,8 @@
 #include "address_space.h"
 #include "gdt.h"
 #include "tss.h"
+#include "syscall.h"
+#include "user_program.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -568,6 +570,9 @@ else if (iguales(linea, "help")) {
     imprimir("tssstacktest\n");
     imprimir("usermaptest\n");
     imprimir("userstacktest\n");
+    imprimir("syscalltest\n");
+    imprimir("usercodetest\n");
+    imprimir("syscall2test\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2290,6 +2295,116 @@ else if (iguales(linea, "userstacktest")) {
                 imprimir("USER STACK TEST: ERROR\n");
             }
         }
+    }
+}
+
+else if (iguales(linea, "syscalltest")) {
+    imprimir("=== PRUEBA SYSCALL MIOS ===\n");
+
+    uint32_t antes = syscall_test_count();
+
+    /*
+     * Solicitar servicio numero 1.
+     * Se ejecuta desde Ring 0 por ahora.
+     */
+    __asm__ volatile (
+        "int $0x80"
+        :
+        : "a"(MIOS_SYS_TEST)
+        : "memory", "cc"
+    );
+
+    uint32_t despues = syscall_test_count();
+
+    if (despues == antes + 1U) {
+        imprimir("Interrupcion 0x80: OK\n");
+        imprimir("Despachador del kernel: OK\n");
+        imprimir("Retorno mediante IRETD: OK\n");
+        imprimir("SYSCALL TEST: OK\n");
+    } else {
+        imprimir("SYSCALL TEST: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "usercodetest")) {
+    imprimir("=== PROGRAMA DE USUARIO MIOS ===\n");
+
+    if (!paging_cpu_enabled() || as_count() != 0) {
+        imprimir("Activa pagingon y libera espacios previos.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+        int id = as_create();
+        int ok = 1;
+
+        if (id < 0) {
+            imprimir("ERROR: crear espacio.\n");
+        } else {
+            uint32_t cr3 = 0;
+            uint32_t frame = 0;
+
+            if (as_get((uint32_t)id, &cr3, &frame) != 0) {
+                ok = 0;
+            } else {
+                if (user_program_prepare(frame) != 0)
+                    ok = 0;
+
+                if (user_program_verify(frame) != 0)
+                    ok = 0;
+
+                if (ok) {
+                    imprimir("Codigo x86 preparado: OK\n");
+                    imprimir("Pagina privada USER: preparada\n");
+                    imprimir("Direccion virtual: ");
+                    imprimir_hex32(MIOS_USER_CODE_VADDR);
+                    imprimir("\n");
+                }
+            }
+
+            if (as_destroy((uint32_t)id) != 0)
+                ok = 0;
+
+            if (pmm_free_frames() != before)
+                ok = 0;
+
+            if (ok)
+                imprimir("USER CODE TEST: OK\n");
+            else
+                imprimir("USER CODE TEST: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "syscall2test")) {
+    imprimir("=== PRUEBA DE SERVICIOS MIOS ===\n");
+
+    uint32_t test_before = syscall_test_count();
+    uint32_t exit_before = syscall_exit_count();
+
+    /* Servicio 1: TEST */
+    __asm__ volatile (
+        "int $0x80"
+        :
+        : "a"(MIOS_SYS_TEST)
+        : "memory", "cc"
+    );
+
+    /* Servicio 2: EXIT provisional */
+    __asm__ volatile (
+        "int $0x80"
+        :
+        : "a"(MIOS_SYS_EXIT)
+        : "memory", "cc"
+    );
+
+    if (syscall_test_count() == test_before + 1U &&
+        syscall_exit_count() == exit_before + 1U) {
+
+        imprimir("SYS_TEST: OK\n");
+        imprimir("SYS_EXIT solicitud: OK\n");
+        imprimir("Interrupcion 0x80: OK\n");
+        imprimir("SYSCALL 2 TEST: OK\n");
+    } else {
+        imprimir("SYSCALL 2 TEST: ERROR\n");
     }
 }
 

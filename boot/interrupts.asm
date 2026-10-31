@@ -3,6 +3,47 @@ bits 32
 
 section .text
 
+; Llamadas al sistema MiOS - int 0x80
+
+global syscall_stub
+extern syscall_dispatch
+
+syscall_stub:
+    ; Conservar los segmentos originales
+    push ds
+    push es
+    push fs
+    push gs
+
+    ; Conservar los registros generales
+    pushad
+    cld
+
+    ; Establecer segmentos de datos del kernel
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    ; EAX original contiene numero de syscall
+    mov eax, [esp + 28]
+    push eax
+    call syscall_dispatch
+    add esp, 4
+
+    ; Restaurar registros
+    popad
+
+    ; Restaurar segmentos originales
+    pop gs
+    pop fs
+    pop es
+    pop ds
+
+    ; Volver al contexto que hizo la llamada
+    iretd
+
 global irq0_stub
 global isr_stub_table
 

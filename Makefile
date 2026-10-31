@@ -12,10 +12,12 @@ all: os.iso
 boot.o: boot/boot.asm
 	$(ASM) -f elf32 $< -o $@
 
-kernel.o: kernel/kernel.c include/fs.h include/interrupts.h include/memory.h include/thread.h include/process.h include/memory_map.h include/pmm.h include/paging.h include/irq.h include/address_space.h include/gdt.h include/tss.h
+kernel.o: kernel/kernel.c include/fs.h include/interrupts.h include/memory.h include/thread.h include/process.h include/memory_map.h include/pmm.h include/paging.h include/irq.h include/address_space.h include/gdt.h include/tss.h include/syscall.h include/user_program.h
 	$(CC) $(CFLAGS) -c kernel/kernel.c -o kernel.o
 fs.o: fs/fs.c include/fs.h
 	$(CC) $(CFLAGS) -c fs/fs.c -o fs.o
+user_program.o: kernel/user_program.c include/user_program.h include/pmm.h
+	$(CC) $(CFLAGS) -c kernel/user_program.c -o user_program.o
 memory.o: kernel/memory.c include/memory.h
 	$(CC) $(CFLAGS) -c kernel/memory.c -o memory.o
 
@@ -25,8 +27,8 @@ tss.o: kernel/tss.c include/tss.h include/gdt.h
 	$(CC) $(CFLAGS) -c kernel/tss.c -o tss.o
 
 
-kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o memory_map.o thread.o tss.o address_space.o pmm.o thread_switch.o gdt.o gdt_flush.o paging.o process.o kernel/linker.ld
-	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o tss.o memory.o gdt.o gdt_flush.o paging.o memory_map.o address_space.o pmm.o thread.o thread_switch.o process.o
+kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o memory_map.o user_program.o thread.o syscall.o tss.o address_space.o pmm.o thread_switch.o gdt.o gdt_flush.o paging.o process.o kernel/linker.ld
+	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o kernel.o fs.o ata.o user_program.o interrupts.o interrupts_c.o syscall.o tss.o memory.o gdt.o gdt_flush.o paging.o memory_map.o address_space.o pmm.o thread.o thread_switch.o process.o
 
 os.iso: kernel.bin boot/grub/grub.cfg
 	mkdir -p iso/boot/grub
@@ -43,7 +45,7 @@ run: os.iso
 		-boot order=d \
 		-m 128M
 clean:
-	rm -f boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o gdt.o tss.o gdt_flush.o paging.o thread.o address_space.o thread_switch.o process.o kernel.bin os.iso memory_map.o
+	rm -f boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o user_program.o gdt.o syscall.o tss.o gdt_flush.o paging.o thread.o address_space.o thread_switch.o process.o kernel.bin os.iso memory_map.o
 	rm -rf iso/boot
 interrupts.o: boot/interrupts.asm
 	$(ASM) -f elf32 boot/interrupts.asm -o interrupts.o
@@ -60,6 +62,8 @@ gdt.o: kernel/gdt.c include/gdt.h include/tss.h
 gdt_flush.o: boot/gdt_flush.asm
 	$(ASM) -f elf32 boot/gdt_flush.asm -o gdt_flush.o
 
+syscall.o: kernel/syscall.c include/syscall.h include/irq.h
+	$(CC) $(CFLAGS) -c kernel/syscall.c -o syscall.o
 interrupts_c.o: kernel/interrupts.c include/interrupts.h
 	$(CC) $(CFLAGS) -c kernel/interrupts.c -o interrupts_c.o
 memory_map.o: kernel/memory_map.c include/memory_map.h

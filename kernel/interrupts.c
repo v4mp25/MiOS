@@ -31,6 +31,7 @@ static idt_pointer_t idt_pointer;
 static volatile uint32_t timer_ticks = 0;
 
 extern void irq0_stub(void);
+extern void syscall_stub(void);
 extern void yield_stub(void);
 extern void (*isr_stub_table[32])(void);
 
@@ -292,6 +293,26 @@ idt_set_gate(
     (uint32_t)yield_stub,
     read_cs()
 );
+
+/*
+ * Vector 0x80: llamadas al sistema.
+ *
+ * Primero instalamos el controlador.
+ */
+idt_set_gate(
+    0x80,
+    (uint32_t)syscall_stub,
+    read_cs()
+);
+
+/*
+ * 0xEE:
+ * P=1, DPL=3, interrupt gate de 32 bits.
+ *
+ * Permite que Ring 3 invoque int 0x80.
+ */
+idt[0x80].attributes = 0xEE;
+
     __asm__ volatile (
         "lidt %0"
         :
