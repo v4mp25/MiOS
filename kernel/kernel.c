@@ -21,6 +21,7 @@
 #include "user_process.h"
 #include "elf32.h"
 #include "elf_disk.h"
+#include "binfs.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -891,6 +892,7 @@ static uint8_t elf_test_kernel_stack[16384]
     /* Pila Ring 0 para ejecutar el ELF desde ATA */
 static uint8_t elf_disk_run_kernel_stack[16384]
     __attribute__((aligned(16)));
+    static uint8_t binfs_test_buffer[BINFS_MAX_FILE_SIZE];
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -967,6 +969,7 @@ else if (iguales(linea, "help")) {
     imprimir("elfruntest\n");
     imprimir("elfdisktest\n");
     imprimir("elfdiskrun\n");   
+    imprimir("binfstest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4393,6 +4396,62 @@ else if (iguales(linea, "elfdiskrun")) {
         } else {
             imprimir("ELF DISK RUN: ERROR\n");
         }
+    }
+}
+
+else if (iguales(linea, "binfstest")) {
+    imprimir("=== ARCHIVOS BINARIOS MIOS ===\n");
+
+    uint32_t size = 0;
+    int ok = 1;
+
+    if (binfs_read(
+            "hola.elf",
+            binfs_test_buffer,
+            sizeof(binfs_test_buffer),
+            &size
+        ) != 0) {
+
+        imprimir("ERROR: buscar hola.elf.\n");
+        ok = 0;
+    }
+
+    Elf32_LoadInfo info;
+
+    if (ok &&
+        elf32_validate_segments(
+            binfs_test_buffer,
+            size,
+            &info
+        ) != 0) {
+
+        imprimir("ERROR: validar ELF.\n");
+        ok = 0;
+    }
+
+    /* Verificar que no encuentre otro nombre */
+    uint32_t missing_size = 0;
+
+    if (binfs_read(
+            "inexistente.elf",
+            binfs_test_buffer,
+            sizeof(binfs_test_buffer),
+            &missing_size
+        ) == 0) {
+
+        imprimir("ERROR: busqueda por nombre.\n");
+        ok = 0;
+    }
+
+    if (ok) {
+        imprimir("Archivo hola.elf encontrado: OK\n");
+        imprimir("Tamano binario: OK\n");
+        imprimir("Lectura de sectores: OK\n");
+        imprimir("Busqueda por nombre: OK\n");
+        imprimir("ELF32 validado: OK\n");
+        imprimir("BINFS TEST: OK\n");
+    } else {
+        imprimir("BINFS TEST: ERROR\n");
     }
 }
 
