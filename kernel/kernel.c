@@ -3293,6 +3293,7 @@ else if (iguales(linea, "userpidtest")) {
                 ok = 0;
             } else {
                 started = 1;
+                syscall_audit_reset();
             }
         }
 

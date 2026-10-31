@@ -22,5 +22,24 @@ uint32_t syscall_ring3_count(void);
 /* Numero de syscalls originadas en Ring 0 */
 uint32_t syscall_ring0_count(void);
 
+/*
+ * Registro de servicios por tarea.
+ * El PID identifica el proceso real.
+ */
+typedef struct {
+    uint32_t pid;
+    uint32_t test_calls;
+    uint32_t exit_calls;
+} SyscallAudit;
+
+/* Reiniciar el registro de la prueba */
+void syscall_audit_reset(void);
+
+/* Consultar servicios de una tarea */
+int syscall_audit_get(
+    uint32_t task_index,
+    SyscallAudit *result
+);
+
 #endif
 
