@@ -9,13 +9,26 @@ ring3_saved_cr3: resd 1
 
 section .text
 
+
 global ring3_enter
+global ring3_enter_at
 global ring3_exit
 
+; Entrada antigua: mantiene compatibilidad
 ring3_enter:
-    ; Guardar contexto privilegiado
+    mov edx, 0x10800000
+    jmp ring3_enter_common
+
+; Entrada nueva: EIP indicado por ELF
+ring3_enter_at:
+    mov edx, [esp + 12]
+    jmp ring3_enter_common
+
+; El resto del lanzador es compartido
+ring3_enter_common:
     push ebp
     mov ebp, esp
+
 
     push ebx
     push esi
@@ -42,7 +55,7 @@ ring3_enter:
     push dword [ebp + 12]
     push dword 0x00000202
     push dword 0x1B
-    push dword 0x10800000
+    push edx
 
     ; Segmentos de datos de usuario
     mov ax, 0x23

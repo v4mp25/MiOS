@@ -3986,11 +3986,7 @@ else if (iguales(linea, "elfruntest")) {
          * El lanzador actual ring3_enter
          * comienza en 0x10800000.
          */
-        if (ok &&
-            info.entry != MIOS_ELF_USER_BASE) {
-            imprimir("ERROR: entrada ELF incompatible.\n");
-            ok = 0;
-        }
+        
 
         if (ok) {
             id = as_create();
@@ -4028,10 +4024,17 @@ else if (iguales(linea, "elfruntest")) {
             ok = 0;
         }
 
-        if (ok && entry != MIOS_ELF_USER_BASE) {
-            imprimir("ERROR: punto de entrada.\n");
-            ok = 0;
-        }
+        
+/*
+ * Esta prueba utiliza un ELF cuyo
+ * punto de entrada esta desplazado.
+ */
+if (ok && entry !=
+        MIOS_ELF_USER_BASE + 16U) {
+    imprimir("ERROR: entrada ELF inesperada.\n");
+    ok = 0;
+}
+
 
         if (ok) {
             imprimir("Archivo ELF32 validado: OK\n");
@@ -4060,10 +4063,14 @@ else if (iguales(linea, "elfruntest")) {
              * Ejecutar el ELF cargado.
              * SYS_EXIT devuelve a Ring 0.
              */
-            ring3_enter(
-                user_cr3,
-                MIOS_AS_USER_STACK_TOP
-            );
+           
+/* Ejecutar desde el e_entry del ELF */
+ring3_enter_at(
+    user_cr3,
+    MIOS_AS_USER_STACK_TOP,
+    entry
+);
+
 
             /* De vuelta en el kernel */
             tss_set_kernel_stack(old_esp0);

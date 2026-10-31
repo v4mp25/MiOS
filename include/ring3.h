@@ -14,4 +14,14 @@ void ring3_enter(
     uint32_t user_esp
 );
 
+/*
+ * Entrar en Ring 3 con una direccion
+ * de inicio indicada por el ELF.
+ */
+void ring3_enter_at(
+    uint32_t user_cr3,
+    uint32_t user_esp,
+    uint32_t user_entry
+);
+
 #endif
