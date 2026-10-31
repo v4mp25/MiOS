@@ -596,6 +596,7 @@ else if (iguales(linea, "help")) {
     imprimir("usermultitest\n");
     imprimir("userproctest\n");
     imprimir("userpsdemo\n");
+    imprimir("userpidtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -3240,6 +3241,231 @@ else if (iguales(linea, "userpsdemo")) {
             imprimir("USER PS DEMO: OK\n");
         } else {
             imprimir("USER PS DEMO: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "userpidtest")) {
+    imprimir("=== PROCESOS RING 3 CON PID ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0U ||
+        user_process_count() != 0U) {
+
+        imprimir("ERROR: ejecuta pagingon y libera espacios.\n");
+
+    } else {
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+        int prepared = 0;
+        int started = 0;
+
+        if (user_process_prepare() != 0) {
+            imprimir("ERROR: creando procesos.\n");
+            ok = 0;
+        } else {
+            prepared = 1;
+
+            if (user_process_verify() != 0) {
+                imprimir("ERROR: tabla PID.\n");
+                ok = 0;
+            }
+        }
+
+        if (ok) {
+            UserProcess p0;
+            UserProcess p1;
+
+            if (user_process_get_at(0, &p0) != 0 ||
+                user_process_get_at(1, &p1) != 0 ||
+                p0.pid == p1.pid ||
+                p0.cr3 == p1.cr3) {
+
+                ok = 0;
+            } else {
+                imprimir("Dos PID independientes: OK\n");
+            }
+        }
+
+        if (ok) {
+            if (user_runtime_start() != 0) {
+                imprimir("ERROR: iniciando planificador.\n");
+                ok = 0;
+            } else {
+                started = 1;
+            }
+        }
+
+        if (ok) {
+            const UserTask *first =
+                user_task_get(0);
+
+            uint32_t active_pid = 0;
+
+            if (first == NULL ||
+                user_process_current_pid(
+                    &active_pid
+                ) != 0) {
+
+                imprimir("ERROR: PID activo.\n");
+                ok = 0;
+
+            } else {
+                UserProcess p0;
+
+                if (user_process_get_at(0, &p0) != 0 ||
+                    active_pid != p0.pid) {
+
+                    imprimir("ERROR: PID inicial.\n");
+                    ok = 0;
+
+                } else {
+                    imprimir("PID inicial asociado: OK\n");
+
+                    uint32_t test_before =
+                        syscall_test_count();
+
+                    uint32_t exit_before =
+                        syscall_exit_count();
+
+                    uint32_t old_esp0 =
+                        tss_get_kernel_stack();
+
+                    uint32_t flags = irq_save();
+
+                    tss_set_kernel_stack(
+                        first->kernel_esp0
+                    );
+
+                    /*
+                     * Ejecucion real de Ring 3.
+                     * El temporizador alterna
+                     * las dos tareas.
+                     */
+                    ring3_enter(
+                        first->cr3,
+                        first->user_esp
+                    );
+
+                    /* Regreso a la shell Ring 0 */
+                    tss_set_kernel_stack(old_esp0);
+                    irq_restore(flags);
+
+                    if (user_runtime_error() != 0 ||
+                        user_runtime_active()) {
+
+                        imprimir("ERROR: ejecucion.\n");
+                        ok = 0;
+                    }
+
+                    if (syscall_test_count() !=
+                        test_before + 2U) {
+
+                        imprimir("ERROR: SYS_TEST.\n");
+                        ok = 0;
+                    }
+
+                    if (syscall_exit_count() !=
+                        exit_before + 2U) {
+
+                        imprimir("ERROR: SYS_EXIT.\n");
+                        ok = 0;
+                    }
+
+                    if (user_runtime_total_exits() != 2U ||
+                        user_runtime_task_exits(0) != 1U ||
+                        user_runtime_task_exits(1) != 1U) {
+
+                        imprimir("ERROR: finalizaciones.\n");
+                        ok = 0;
+                    }
+
+                    if (user_runtime_irq_switches() == 0U) {
+                        imprimir("ERROR: sin alternancia IRQ0.\n");
+                        ok = 0;
+                    }
+                }
+            }
+        }
+
+        /*
+         * Sincronizar los estados despues
+         * de terminar la ejecucion.
+         */
+        if (ok && user_process_sync_states() != 0)
+            ok = 0;
+
+        if (ok) {
+            UserProcess p0;
+            UserProcess p1;
+
+            if (user_process_get_at(0, &p0) != 0 ||
+                user_process_get_at(1, &p1) != 0 ||
+                p0.state != USER_PROCESS_DONE ||
+                p1.state != USER_PROCESS_DONE) {
+
+                imprimir("ERROR: estados de procesos.\n");
+                ok = 0;
+
+            } else {
+                imprimir("Proceso PID 1 finalizado: OK\n");
+                imprimir("Proceso PID 2 finalizado: OK\n");
+                imprimir("Estados DONE sincronizados: OK\n");
+            }
+        }
+
+        /*
+         * Comprobar CR3 antes de liberar.
+         */
+        uint32_t current_cr3 = 0;
+
+        __asm__ volatile (
+            "mov %%cr3, %0"
+            : "=r"(current_cr3)
+            :
+            : "memory"
+        );
+
+        current_cr3 &= 0xFFFFF000U;
+
+        if (current_cr3 !=
+            paging_directory_address()) {
+
+            imprimir("ERROR: CR3 principal no restaurado.\n");
+            ok = 0;
+
+        } else if (user_runtime_active()) {
+
+            imprimir("ERROR: sesion todavia activa.\n");
+            ok = 0;
+
+        } else {
+            if (prepared ||
+                user_process_count() != 0U ||
+                as_count() != 0U) {
+
+                if (user_process_cleanup() != 0) {
+                    imprimir("ERROR: limpieza.\n");
+                    ok = 0;
+                }
+            }
+        }
+
+        if (user_process_count() != 0U ||
+            as_count() != 0U ||
+            pmm_free_frames() != before) {
+
+            imprimir("ERROR: recursos pendientes.\n");
+            ok = 0;
+        }
+
+        if (ok && started) {
+            imprimir("Round Robin por IRQ0: OK\n");
+            imprimir("Dos SYS_EXIT asociados: OK\n");
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("USER PID TEST: OK\n");
+        } else {
+            imprimir("USER PID TEST: ERROR\n");
         }
     }
 }

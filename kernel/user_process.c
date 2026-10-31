@@ -7,7 +7,7 @@
 #include "address_space.h"
 #include "paging.h"
 #include "irq.h"
-
+#include "user_scheduler.h"
 static UserProcess processes[MIOS_USER_TASK_COUNT];
 
 /*
@@ -300,4 +300,39 @@ int user_process_pid_by_task(
 
     irq_restore(flags);
     return -1;
+}
+
+/*
+ * Consultar el PID de la tarea que
+ * el planificador tiene seleccionada.
+ *
+ * Devuelve -1 cuando no existe una
+ * sesion de usuario en ejecucion.
+ */
+int user_process_current_pid(uint32_t *pid) {
+    if (pid == NULL)
+        return -1;
+
+    uint32_t flags = irq_save();
+
+    if (!user_runtime_active()) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    int index = user_rr_current();
+
+    if (index < 0 ||
+        index >= (int)MIOS_USER_TASK_COUNT) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    int result = user_process_pid_by_task(
+        (uint32_t)index,
+        pid
+    );
+
+    irq_restore(flags);
+    return result;
 }

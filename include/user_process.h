@@ -56,5 +56,6 @@ int user_process_pid_by_task(
     uint32_t task_index,
     uint32_t *pid
 );
-
+/* Obtener el PID seleccionado por Round Robin */
+int user_process_current_pid(uint32_t *pid);
 #endif
