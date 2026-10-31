@@ -9,7 +9,7 @@
 
 #define AS_PRESENT 0x001U
 #define AS_WRITE   0x002U
-
+#define AS_USER    0x004U
 #define AS_KERNEL_TABLES 32U
 #define AS_PRIVATE_PDE 66U
 
@@ -135,11 +135,18 @@ int as_create(void) {
      * Una pagina privada en 0x10800000.
      * Por ahora solo accesible en Ring 0.
      */
-    private_table[0] =
-        data | AS_PRESENT | AS_WRITE;
+   
+/*
+ * Pagina privada accesible desde Ring 3.
+ * Lectura y escritura permitidas.
+ */
+private_table[0] =
+    data | AS_PRESENT | AS_WRITE | AS_USER;
 
-    new_directory[AS_PRIVATE_PDE] =
-        table | AS_PRESENT | AS_WRITE;
+/* El directorio tambien permite USER */
+new_directory[AS_PRIVATE_PDE] =
+    table | AS_PRESENT | AS_WRITE | AS_USER;
+
 
     spaces[slot].directory_frame = dir;
     spaces[slot].table_frame = table;

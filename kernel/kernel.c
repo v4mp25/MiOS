@@ -566,6 +566,7 @@ else if (iguales(linea, "help")) {
     imprimir("gdtcheck\n");
     imprimir("tsscheck\n");
     imprimir("tssstacktest\n");
+    imprimir("usermaptest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2161,6 +2162,67 @@ else if (iguales(linea, "tssstacktest")) {
             imprimir("TSS STACK TEST: OK\n");
         } else {
             imprimir("TSS STACK TEST: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "usermaptest")) {
+    imprimir("=== PRUEBA DE PAGINAS USER ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0) {
+        imprimir("Activa pagingon y libera los espacios previos.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+        int id = as_create();
+
+        if (id < 0) {
+            imprimir("ERROR: crear espacio.\n");
+        } else {
+            uint32_t cr3 = 0;
+            uint32_t frame = 0;
+            int ok = 1;
+
+            if (as_get((uint32_t)id, &cr3, &frame) != 0) {
+                ok = 0;
+            } else {
+                uint32_t *directory =
+                    (uint32_t *)(uintptr_t)cr3;
+
+                uint32_t pde = directory[66];
+
+                uint32_t *table =
+                    (uint32_t *)(uintptr_t)
+                    (pde & 0xFFFFF000U);
+
+                uint32_t pte = table[0];
+
+                if ((pde & 0x7U) == 0x7U &&
+                    (pte & 0x7U) == 0x7U &&
+                    (pte & 0xFFFFF000U) == frame) {
+                    imprimir("Pagina privada USER: OK\n");
+                } else {
+                    ok = 0;
+                }
+
+                /* Las paginas del kernel no son USER */
+                if ((directory[0] & 0x4U) == 0) {
+                    imprimir("Directorio kernel supervisor: OK\n");
+                } else {
+                    ok = 0;
+                }
+            }
+
+            if (as_destroy((uint32_t)id) != 0)
+                ok = 0;
+
+            if (pmm_free_frames() != before)
+                ok = 0;
+
+            if (ok)
+                imprimir("USER MAP TEST: OK\n");
+            else
+                imprimir("USER MAP TEST: ERROR\n");
         }
     }
 }
