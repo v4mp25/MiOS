@@ -31,4 +31,15 @@ int as_release(uint32_t id);
 
 /* Consultar cuantos usuarios tiene */
 int as_users(uint32_t id);
+
+/* Pila virtual de usuario */
+#define MIOS_AS_USER_STACK_BASE 0x10801000U
+#define MIOS_AS_USER_STACK_TOP  0x10802000U
+
+/* Consultar el marco de la pila de usuario */
+int as_get_user_stack(
+    uint32_t id,
+    uint32_t *physical_frame
+);
+
 #endif

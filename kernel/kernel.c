@@ -567,6 +567,7 @@ else if (iguales(linea, "help")) {
     imprimir("tsscheck\n");
     imprimir("tssstacktest\n");
     imprimir("usermaptest\n");
+    imprimir("userstacktest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2223,6 +2224,71 @@ else if (iguales(linea, "usermaptest")) {
                 imprimir("USER MAP TEST: OK\n");
             else
                 imprimir("USER MAP TEST: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "userstacktest")) {
+    imprimir("=== PRUEBA PILA DE USUARIO ===\n");
+
+    if (!paging_cpu_enabled() || as_count() != 0) {
+        imprimir("Activa pagingon y libera espacios anteriores.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+        int id = as_create();
+        int ok = 1;
+
+        if (id < 0) {
+            imprimir("ERROR: crear espacio.\n");
+        } else {
+            uint32_t cr3 = 0;
+            uint32_t data = 0;
+            uint32_t stack = 0;
+
+            if (as_get((uint32_t)id, &cr3, &data) != 0 ||
+                as_get_user_stack((uint32_t)id, &stack) != 0) {
+                ok = 0;
+            } else {
+                uint32_t *dir =
+                    (uint32_t *)(uintptr_t)cr3;
+
+                uint32_t pde = dir[66];
+
+                uint32_t *table =
+                    (uint32_t *)(uintptr_t)
+                    (pde & 0xFFFFF000U);
+
+                uint32_t data_pte = table[0];
+                uint32_t stack_pte = table[1];
+
+                if ((pde & 7U) != 7U ||
+                    (data_pte & 7U) != 7U ||
+                    (stack_pte & 7U) != 7U ||
+                    (stack_pte & 0xFFFFF000U) != stack ||
+                    data == stack) {
+                    ok = 0;
+                } else {
+                    imprimir("Pagina datos USER: OK\n");
+                    imprimir("Pagina pila USER: OK\n");
+                    imprimir("Marcos independientes: OK\n");
+                }
+
+                if ((dir[0] & 4U) != 0)
+                    ok = 0;
+            }
+
+            if (as_destroy((uint32_t)id) != 0)
+                ok = 0;
+
+            if (pmm_free_frames() != before)
+                ok = 0;
+
+            if (ok) {
+                imprimir("Liberacion: OK\n");
+                imprimir("USER STACK TEST: OK\n");
+            } else {
+                imprimir("USER STACK TEST: ERROR\n");
+            }
         }
     }
 }

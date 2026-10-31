@@ -13,11 +13,13 @@
 #define AS_KERNEL_TABLES 32U
 #define AS_PRIVATE_PDE 66U
 
+
 typedef struct {
     int used;
     uint32_t directory_frame;
     uint32_t table_frame;
     uint32_t data_frame;
+    uint32_t stack_frame;
     uint32_t users;
 } AddressSpace;
 
@@ -51,8 +53,10 @@ void as_init(void) {
         spaces[i].table_frame = 0;
         spaces[i].data_frame = 0;
         spaces[i].users = 0;
+        spaces[i].stack_frame = 0;
     }
 }
+
 
 int as_create(void) {
     uint32_t flags = irq_save();
@@ -80,11 +84,15 @@ int as_create(void) {
     uint32_t dir = 0;
     uint32_t table = 0;
     uint32_t data = 0;
+    uint32_t stack = 0;
 
     int got_dir = 0;
     int got_table = 0;
     int got_data = 0;
+    int got_stack = 0;
+
     int data_pinned = 0;
+    int stack_pinned = 0;
 
     if (pmm_alloc_frame(&dir) != 0)
         goto fail;
@@ -98,17 +106,23 @@ int as_create(void) {
         goto fail;
     got_data = 1;
 
+    if (pmm_alloc_frame(&stack) != 0)
+        goto fail;
+    got_stack = 1;
+
     if (pmm_pin_frame(data) != 0)
         goto fail;
     data_pinned = 1;
 
-    /*
-     * El kernel actual mapea por identidad
-     * los primeros 128 MiB.
-     */
+    if (pmm_pin_frame(stack) != 0)
+        goto fail;
+    stack_pinned = 1;
+
+    /* Inicializar los cuatro marcos */
     clear_page(dir);
     clear_page(table);
     clear_page(data);
+    clear_page(stack);
 
     uint32_t *new_directory =
         (uint32_t *)(uintptr_t)dir;
@@ -120,47 +134,44 @@ int as_create(void) {
         (uint32_t *)(uintptr_t)
         paging_directory_address();
 
-    /*
-     * Compartir las primeras 32 tablas
-     * del kernel.
-     */
+    /* Compartir mapeo del kernel */
     for (uint32_t i = 0;
          i < AS_KERNEL_TABLES;
          i++) {
-
         new_directory[i] = kernel_directory[i];
     }
 
-    /*
-     * Una pagina privada en 0x10800000.
-     * Por ahora solo accesible en Ring 0.
-     */
-   
-/*
- * Pagina privada accesible desde Ring 3.
- * Lectura y escritura permitidas.
- */
-private_table[0] =
-    data | AS_PRESENT | AS_WRITE | AS_USER;
+    /* Entrada 0: datos de usuario */
+    private_table[0] =
+        data | AS_PRESENT | AS_WRITE | AS_USER;
 
-/* El directorio tambien permite USER */
-new_directory[AS_PRIVATE_PDE] =
-    table | AS_PRESENT | AS_WRITE | AS_USER;
+    /* Entrada 1: pila de usuario */
+    private_table[1] =
+        stack | AS_PRESENT | AS_WRITE | AS_USER;
 
+    /* Directorio para las dos paginas */
+    new_directory[AS_PRIVATE_PDE] =
+        table | AS_PRESENT | AS_WRITE | AS_USER;
 
     spaces[slot].directory_frame = dir;
     spaces[slot].table_frame = table;
     spaces[slot].data_frame = data;
+    spaces[slot].stack_frame = stack;
     spaces[slot].users = 0;
     spaces[slot].used = 1;
 
     irq_restore(flags);
-
     return slot + 1;
 
 fail:
+    if (stack_pinned)
+        pmm_unpin_frame(stack);
+
     if (data_pinned)
         pmm_unpin_frame(data);
+
+    if (got_stack)
+        pmm_free_frame(stack);
 
     if (got_data)
         pmm_free_frame(data);
@@ -224,10 +235,11 @@ int as_destroy(uint32_t id) {
      * La pagina privada debe tener exactamente
      * una referencia registrada.
      */
-    if (pmm_frame_pin_count(s->data_frame) != 1) {
-        irq_restore(flags);
-        return -1;
-    }
+    if (pmm_frame_pin_count(s->data_frame) != 1 ||
+    pmm_frame_pin_count(s->stack_frame) != 1) {
+    irq_restore(flags);
+    return -1;
+}
 
     /*
      * Retirar la referencia de la pagina privada.
@@ -241,18 +253,26 @@ int as_destroy(uint32_t id) {
      * Liberar los tres marcos fisicos:
      * pagina privada, tabla y directorio.
      */
-    int a = pmm_free_frame(s->data_frame);
-    int b = pmm_free_frame(s->table_frame);
-    int c = pmm_free_frame(s->directory_frame);
+   if (pmm_unpin_frame(s->stack_frame) != 0) {
+    /* Recuperar la referencia anterior */
+    pmm_pin_frame(s->data_frame);
+    irq_restore(flags);
+    return -1;
+}
 
-    if (a != 0 || b != 0 || c != 0) {
-        /*
-         * Conservar el descriptor si ocurre
-         * un error durante la liberacion.
-         */
-        irq_restore(flags);
-        return -1;
-    }
+/* Liberar los cuatro marcos */
+
+int a = pmm_free_frame(s->data_frame);
+int b = pmm_free_frame(s->stack_frame);
+int c = pmm_free_frame(s->table_frame);
+int d = pmm_free_frame(s->directory_frame);
+
+/* Comprobar que los cuatro marcos se liberaron */
+if (a != 0 || b != 0 || c != 0 || d != 0) {
+    irq_restore(flags);
+    return -1;
+}
+
 
     /* Limpiar completamente el descriptor */
     s->used = 0;
@@ -260,7 +280,7 @@ int as_destroy(uint32_t id) {
     s->table_frame = 0;
     s->data_frame = 0;
     s->users = 0;
-
+s->stack_frame = 0;
     irq_restore(flags);
     return 0;
 }
@@ -360,4 +380,24 @@ int as_users(uint32_t id) {
 
     irq_restore(flags);
     return result;
+}
+
+int as_get_user_stack(
+    uint32_t id,
+    uint32_t *physical_frame
+) {
+    uint32_t flags = irq_save();
+
+    if (id == 0 ||
+        id > MIOS_AS_MAX ||
+        physical_frame == NULL ||
+        !spaces[id - 1].used) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    *physical_frame = spaces[id - 1].stack_frame;
+
+    irq_restore(flags);
+    return 0;
 }
