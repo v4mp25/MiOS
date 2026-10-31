@@ -636,6 +636,8 @@ else if (iguales(linea, "ps")) {
         imprimir_numero(p.pid);
         imprimir("     ");
         imprimir(p.name);
+        imprimir("  ASID: ");
+imprimir_numero(p.asid);
         imprimir("   ");
 
         switch (p.state) {

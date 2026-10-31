@@ -14,10 +14,14 @@ typedef enum {
     PROCESS_TERMINATED
 } ProcessState;
 
+
 typedef struct {
     uint32_t pid;
     char name[PROCESS_NAME_SIZE];
     ProcessState state;
+
+    /* Espacio de direcciones del proceso */
+    uint32_t asid;
 } ProcessInfo;
 
 void process_init(void);
