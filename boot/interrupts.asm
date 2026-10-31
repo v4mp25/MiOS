@@ -5,44 +5,68 @@ section .text
 
 ; Llamadas al sistema MiOS - int 0x80
 
+
 global syscall_stub
+
 extern syscall_dispatch
+extern ring3_exit
 
 syscall_stub:
-    ; Conservar los segmentos originales
+    ; Guardar segmentos originales
     push ds
     push es
     push fs
     push gs
 
-    ; Conservar los registros generales
+    ; Guardar registros generales
     pushad
     cld
 
-    ; Establecer segmentos de datos del kernel
+    ; Utilizar segmentos del kernel
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
-    ; EAX original contiene numero de syscall
+    ; EAX original: numero de syscall
     mov eax, [esp + 28]
     push eax
     call syscall_dispatch
     add esp, 4
 
-    ; Restaurar registros
+    ; ¿La llamada fue SYS_EXIT (2)?
+    cmp dword [esp + 28], 2
+    jne .normal_return
+
+    ; Revisar el CPL del CS guardado.
+    ;
+    ; pushad:           32 bytes
+    ; segmentos:        16 bytes
+    ; EIP guardado:      4 bytes
+    ; CS guardado:       offset 52
+    mov eax, [esp + 52]
+    and eax, 3
+
+    ; SYS_EXIT desde Ring 0 conserva
+    ; el comportamiento de syscall2test.
+    cmp eax, 3
+    jne .normal_return
+
+    ; SYS_EXIT desde Ring 3:
+    ; recuperar el contexto de shell.
+    jmp ring3_exit
+
+.normal_return:
     popad
 
-    ; Restaurar segmentos originales
     pop gs
     pop fs
     pop es
     pop ds
 
-    ; Volver al contexto que hizo la llamada
     iretd
+
 
 global irq0_stub
 global isr_stub_table

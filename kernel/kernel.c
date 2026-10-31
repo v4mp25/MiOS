@@ -14,6 +14,7 @@
 #include "tss.h"
 #include "syscall.h"
 #include "user_program.h"
+#include "ring3.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -513,6 +514,15 @@ static void tss_test_task2(void) {
         tss_test_ok[1] = 0;
 }
 
+/*
+ * Pila privilegiada para el primer
+ * programa de usuario.
+ *
+ * No usar la pila de usuario como ESP0.
+ */
+static uint8_t ring3_test_kernel_stack[16384]
+    __attribute__((aligned(16)));
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -573,6 +583,7 @@ else if (iguales(linea, "help")) {
     imprimir("syscalltest\n");
     imprimir("usercodetest\n");
     imprimir("syscall2test\n");
+    imprimir("ring3test\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2405,6 +2416,124 @@ else if (iguales(linea, "syscall2test")) {
         imprimir("SYSCALL 2 TEST: OK\n");
     } else {
         imprimir("SYSCALL 2 TEST: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "ring3test")) {
+    imprimir("=== PRIMER PROGRAMA RING 3 ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0) {
+        imprimir("Activa pagingon y libera espacios previos.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+
+        int id = as_create();
+
+        if (id < 0) {
+            imprimir("ERROR: crear espacio.\n");
+        } else {
+            uint32_t user_cr3 = 0;
+            uint32_t code_frame = 0;
+            uint32_t stack_frame = 0;
+
+            int ok = 1;
+
+            if (as_get(
+                    (uint32_t)id,
+                    &user_cr3,
+                    &code_frame
+                ) != 0 ||
+                as_get_user_stack(
+                    (uint32_t)id,
+                    &stack_frame
+                ) != 0) {
+
+                ok = 0;
+            }
+
+            if (ok &&
+                user_program_prepare(code_frame) != 0) {
+                ok = 0;
+            }
+
+            if (ok &&
+                user_program_verify(code_frame) != 0) {
+                ok = 0;
+            }
+
+            if (ok) {
+                uint32_t tests_before =
+                    syscall_test_count();
+
+                uint32_t exits_before =
+                    syscall_exit_count();
+
+                uint32_t old_esp0 =
+                    tss_get_kernel_stack();
+
+                /*
+                 * Desactivar IRQ durante la
+                 * prueba controlada.
+                 */
+                uint32_t flags = irq_save();
+
+                /*
+                 * Pila que usara la CPU al
+                 * entrar desde Ring 3.
+                 */
+                uint32_t kernel_top =
+                    (uint32_t)(uintptr_t)
+                    (ring3_test_kernel_stack +
+                     sizeof(ring3_test_kernel_stack));
+
+                tss_set_kernel_stack(kernel_top);
+
+                /*
+                 * Entrada real a Ring 3.
+                 *
+                 * Debe regresar mediante
+                 * SYS_EXIT y ring3_exit.
+                 */
+                ring3_enter(
+                    user_cr3,
+                    MIOS_AS_USER_STACK_TOP
+                );
+
+                /* Ya estamos nuevamente en Ring 0 */
+                tss_set_kernel_stack(old_esp0);
+
+                irq_restore(flags);
+
+                if (syscall_test_count() !=
+                    tests_before + 1U) {
+                    ok = 0;
+                }
+
+                if (syscall_exit_count() !=
+                    exits_before + 1U) {
+                    ok = 0;
+                }
+
+                if (ok) {
+                    imprimir("SYS_TEST desde usuario: OK\n");
+                    imprimir("SYS_EXIT desde usuario: OK\n");
+                    imprimir("Retorno a Ring 0: OK\n");
+                }
+            }
+
+            if (as_destroy((uint32_t)id) != 0)
+                ok = 0;
+
+            if (pmm_free_frames() != before)
+                ok = 0;
+
+            if (ok) {
+                imprimir("RING 3 TEST: OK\n");
+            } else {
+                imprimir("RING 3 TEST: ERROR\n");
+            }
+        }
     }
 }
 
