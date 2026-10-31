@@ -22,6 +22,7 @@ typedef struct {
 static Thread threads[MIOS_MAX_THREADS];
 
 static uint32_t main_esp = 0;
+static uint32_t main_cr3 = 0;
 static int current_thread = -1;
 static int scheduler_running = 0;
 
@@ -46,6 +47,38 @@ static inline void irq_enable(void) {
     __asm__ volatile ("sti" ::: "memory");
 }
 
+/* Leer el directorio de paginas activo */
+static inline uint32_t thread_read_cr3(void) {
+    uint32_t cr3;
+
+    __asm__ volatile (
+        "mov %%cr3, %0"
+        : "=r"(cr3)
+        :
+        : "memory"
+    );
+
+    return cr3 & 0xFFFFF000U;
+}
+
+/* Activar otro directorio de paginas */
+static inline void thread_load_cr3(uint32_t cr3) {
+    __asm__ volatile (
+        "mov %0, %%cr3"
+        :
+        : "r"(cr3)
+        : "memory"
+    );
+}
+
+/* CR3 asociado o directorio principal */
+static uint32_t thread_target_cr3(int tid) {
+    if (threads[tid].cr3 != 0)
+        return threads[tid].cr3;
+
+    return paging_directory_address();
+}
+
 /* Consulta el selector de codigo actual */
 static uint16_t read_cs(void) {
     uint16_t cs;
@@ -67,6 +100,7 @@ static int find_next(int after) {
 static void thread_finish(void)
     __attribute__((noreturn));
 
+
 static void thread_finish(void) {
     irq_disable();
 
@@ -78,21 +112,39 @@ static void thread_finish(void) {
 
     if (next >= 0) {
         current_thread = next;
+
+        uint32_t next_cr3 = thread_target_cr3(next);
+
+       if (paging_cpu_enabled() &&
+    thread_read_cr3() != next_cr3) {
+    thread_load_cr3(next_cr3);
+}
+
         thread_resume_irq(threads[next].esp);
     }
 
-    /* Todos terminaron: regresar al shell */
+    /*
+     * No quedan hilos listos.
+     * Regresar al directorio principal.
+     */
     current_thread = -1;
+
+  if (paging_cpu_enabled() &&
+    thread_read_cr3() != main_cr3) {
+    thread_load_cr3(main_cr3);
+}
 
     thread_switch(
         &threads[previous].esp,
         &main_esp
     );
 
+    /* Nunca deberia regresar aqui */
     for (;;) {
         __asm__ volatile ("cli; hlt");
     }
 }
+
 
 /* Primera funcion que ejecuta cada hilo */
 static void thread_entry(void) {
@@ -127,6 +179,7 @@ void thread_init(void) {
 
         main_esp = 0;
         current_thread = -1;
+        main_cr3 = 0;
     }
 
     if (flags & (1U << 9)) {
@@ -194,25 +247,35 @@ threads[i].function = function;
  * Se llama con interrupciones deshabilitadas,
  * desde IRQ0 o desde la interrupcion de yield.
  */
+
 static uint32_t schedule_from_irq(uint32_t esp) {
     if (!scheduler_running || current_thread < 0)
         return esp;
 
     int previous = current_thread;
-
     int next = find_next(previous);
 
     if (next < 0 || next == previous)
         return esp;
 
-    /* Conservar el contexto interrumpido */
+    /* Guardar la pila del hilo interrumpido */
     threads[previous].esp = esp;
 
+    /* Seleccionar siguiente hilo */
     current_thread = next;
 
-    /* El ASM restaurara este nuevo contexto */
+    uint32_t next_cr3 = thread_target_cr3(next);
+
+    /* Activar su espacio de memoria */
+   if (paging_cpu_enabled() &&
+    thread_read_cr3() != next_cr3) {
+    thread_load_cr3(next_cr3);
+}
+
+    /* El controlador ASM restaurara este ESP */
     return threads[next].esp;
 }
+
 
 /* Llamado desde el temporizador */
 uint32_t scheduler_on_tick(uint32_t esp) {
@@ -258,14 +321,47 @@ int thread_run(void) {
         return -1;
     }
 
-    scheduler_running = 1;
-    current_thread = first;
+   /* Guardar el CR3 que utiliza la shell */
+main_cr3 = thread_read_cr3();
 
-    /* Regresa cuando todos los hilos terminan */
-    thread_enter(
-        &main_esp,
-        threads[first].esp
-    );
+scheduler_running = 1;
+current_thread = first;
+
+/* Activar el directorio del primer hilo */
+uint32_t first_cr3 = thread_target_cr3(first);
+
+if (thread_read_cr3() != first_cr3) {
+    thread_load_cr3(first_cr3);
+}
+
+/* Comenzar la ejecucion del primer hilo */
+thread_enter(
+    &main_esp,
+    threads[first].esp
+);
+if (paging_cpu_enabled() &&
+        thread_read_cr3() != main_cr3) {
+
+        __asm__ volatile ("cli");
+
+        for (;;) {
+            __asm__ volatile ("hlt");
+        }
+    }
+
+    /* Continuar con la limpieza que ya tenias */
+    scheduler_running = 0;
+    current_thread = -1;
+
+    irq_enable();
+if (thread_read_cr3() != main_cr3) {
+    /* Fallo grave del retorno al espacio principal */
+    __asm__ volatile ("cli");
+
+    for (;;) {
+        __asm__ volatile ("hlt");
+    }
+}
 
     /* Estamos nuevamente en el contexto principal */
     scheduler_running = 0;

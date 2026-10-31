@@ -387,6 +387,42 @@ static void vmm_concurrent_task2(void) {
     vmm_concurrent_worker(1);
 }
 
+/* Prueba real de CR3 durante Round Robin */
+
+static volatile uint32_t proc_cr3_result[2] = {0, 0};
+static volatile uint32_t proc_cr3_errors[2] = {0, 0};
+
+static void process_cr3_worker(uint32_t id) {
+    uint32_t expected = (id == 0) ? 1111U : 2222U;
+
+    volatile uint32_t *private_mem =
+        (volatile uint32_t *)(uintptr_t)
+        MIOS_AS_PRIVATE_VADDR;
+
+    /* Escribir en la pagina privada */
+    private_mem[0] = expected;
+
+    uint32_t start = timer_get_ticks();
+
+    /* Permitir varios cambios de contexto */
+    while ((uint32_t)(timer_get_ticks() - start) < 30U) {
+        if (private_mem[0] != expected)
+            proc_cr3_errors[id]++;
+
+        __asm__ volatile ("" ::: "memory");
+    }
+
+    proc_cr3_result[id] = private_mem[0];
+}
+
+static void process_cr3_task_a(void) {
+    process_cr3_worker(0);
+}
+
+static void process_cr3_task_b(void) {
+    process_cr3_worker(1);
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -436,6 +472,7 @@ else if (iguales(linea, "help")) {
     imprimir("cr3test\n");
     imprimir("ascreate, aslist, asdestroy ID\n");
     imprimir("asbusytest\n");
+    imprimir("processcr3test\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1904,6 +1941,53 @@ else if (iguales(linea, "asbusytest")) {
                 imprimir("AS BUSY TEST: OK\n");
             else
                 imprimir("AS BUSY TEST: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "processcr3test")) {
+    imprimir("=== PRUEBA CR3 POR PROCESO ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("Primero ejecuta pagingon.\n");
+    } else {
+        proc_cr3_result[0] = 0;
+        proc_cr3_result[1] = 0;
+        proc_cr3_errors[0] = 0;
+        proc_cr3_errors[1] = 0;
+
+        uint32_t before = pmm_free_frames();
+
+        int a = process_create(
+            "cr3_proceso_a",
+            process_cr3_task_a
+        );
+
+        int b = process_create(
+            "cr3_proceso_b",
+            process_cr3_task_b
+        );
+
+        if (a < 0 || b < 0) {
+            imprimir("ERROR: creacion de procesos.\n");
+            imprimir("No ejecutar thread_run.\n");
+        } else {
+            int result = process_run();
+
+            if (result == 0 &&
+                proc_cr3_result[0] == 1111U &&
+                proc_cr3_result[1] == 2222U &&
+                proc_cr3_errors[0] == 0 &&
+                proc_cr3_errors[1] == 0 &&
+                pmm_free_frames() == before) {
+
+                imprimir("Proceso A: 1111 OK\n");
+                imprimir("Proceso B: 2222 OK\n");
+                imprimir("Cambio automatico de CR3: OK\n");
+                imprimir("PROCESS CR3 TEST: OK\n");
+            } else {
+                imprimir("PROCESS CR3 TEST: ERROR\n");
+            }
         }
     }
 }
