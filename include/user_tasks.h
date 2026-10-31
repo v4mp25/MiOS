@@ -52,4 +52,8 @@ int user_task_get_context(
     uint32_t *cr3,
     uint32_t *kernel_esp0
 );
+int user_task_validate_context(
+    uint32_t index,
+    uint32_t saved_esp
+);
 #endif

@@ -373,7 +373,8 @@ int user_task_save_context(
         saved_esp > stack_top - 68U ||
         (saved_esp & 3U) != 0U)
         return -1;
-
+if (user_task_validate_context(index, saved_esp) != 0)
+    return -1;
     task->saved_kernel_esp = saved_esp;
     return 0;
 }
@@ -406,10 +407,84 @@ int user_task_get_context(
         task->saved_kernel_esp >
             task->kernel_esp0 - 68U)
         return -1;
-
+if (user_task_validate_context(
+        index,
+        task->saved_kernel_esp
+    ) != 0) {
+    return -1;
+}
     *saved_esp = task->saved_kernel_esp;
     *cr3 = task->cr3;
     *kernel_esp0 = task->kernel_esp0;
+
+    return 0;
+}
+
+int user_task_validate_context(
+    uint32_t index,
+    uint32_t saved_esp
+) {
+    if (index >= MIOS_USER_TASK_COUNT)
+        return -1;
+
+    const UserTask *task = &tasks[index];
+
+    if (task->state != USER_TASK_READY)
+        return -1;
+
+    if (task->kernel_esp0 < 16384U)
+        return -1;
+
+    uint32_t bottom =
+        task->kernel_esp0 - 16384U;
+
+    /* El marco completo ocupa 68 bytes */
+    if (saved_esp < bottom ||
+        saved_esp > task->kernel_esp0 - 68U ||
+        (saved_esp & 3U) != 0U)
+        return -1;
+
+    const uint32_t *frame =
+        (const uint32_t *)(uintptr_t)saved_esp;
+
+    /*
+     * Marco Ring 3:
+     * 0-7  PUSHAD
+     * 8-11 segmentos
+     * 12   EIP
+     * 13   CS
+     * 14   EFLAGS
+     * 15   ESP usuario
+     * 16   SS usuario
+     */
+
+    if (frame[13] != 0x1BU ||
+        frame[16] != 0x23U)
+        return -1;
+
+    if (frame[8] != 0x23U ||
+        frame[9] != 0x23U ||
+        frame[10] != 0x23U ||
+        frame[11] != 0x23U)
+        return -1;
+
+    /* EIP dentro de la pagina ejecutable */
+    if (frame[12] < MIOS_USER_CODE_VADDR ||
+        frame[12] >= MIOS_USER_CODE_VADDR + 4096U)
+        return -1;
+
+    /* ESP dentro de la pila USER */
+    if (frame[15] <= MIOS_AS_USER_STACK_BASE ||
+        frame[15] > MIOS_AS_USER_STACK_TOP)
+        return -1;
+
+    /* EFLAGS: bit reservado, IF activo */
+    if ((frame[14] & 0x202U) != 0x202U)
+        return -1;
+
+    /* No permitir VM86, NT ni IOPL elevado */
+    if ((frame[14] & 0x00027000U) != 0U)
+        return -1;
 
     return 0;
 }

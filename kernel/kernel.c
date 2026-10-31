@@ -591,6 +591,7 @@ else if (iguales(linea, "help")) {
     imprimir("usertasktest\n");
     imprimir("userrrtest\n");
     imprimir("usercontextswitchtest\n");
+    imprimir("userframecheck\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2787,6 +2788,99 @@ else if (iguales(linea, "usercontextswitchtest")) {
             imprimir("USER CONTEXT SWITCH TEST: OK\n");
         else
             imprimir("USER CONTEXT SWITCH TEST: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "userframecheck")) {
+    imprimir("=== VALIDACION DE MARCOS USER ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0U) {
+        imprimir("Activa pagingon y libera espacios.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+
+        if (user_tasks_prepare() != 0) {
+            ok = 0;
+        } else {
+            if (user_tasks_context_verify() != 0)
+                ok = 0;
+
+            for (uint32_t i = 0;
+                 i < MIOS_USER_TASK_COUNT;
+                 i++) {
+
+                const UserTask *task =
+                    user_task_get(i);
+
+                if (task == 0) {
+                    ok = 0;
+                    break;
+                }
+
+                uint32_t esp =
+                    task->saved_kernel_esp;
+
+                /* Contexto correcto */
+                if (user_task_validate_context(
+                        i, esp
+                    ) != 0) {
+                    ok = 0;
+                }
+
+                /* Direccion desalineada */
+                if (user_task_validate_context(
+                        i, esp + 1U
+                    ) == 0) {
+                    ok = 0;
+                }
+
+                /* Marco fuera de la pila */
+                if (user_task_validate_context(
+                        i, task->kernel_esp0
+                    ) == 0) {
+                    ok = 0;
+                }
+
+                if (user_task_save_context(
+                        i, esp
+                    ) != 0) {
+                    ok = 0;
+                }
+            }
+
+            /* La pila de otra tarea no es valida */
+            const UserTask *other =
+                user_task_get(1);
+
+            if (other != 0 &&
+                user_task_validate_context(
+                    0,
+                    other->saved_kernel_esp
+                ) == 0) {
+                ok = 0;
+            }
+        }
+
+        if (ok) {
+            imprimir("Marcos Ring 3 validos: OK\n");
+            imprimir("Limites de pila kernel: OK\n");
+            imprimir("ESP desalineado rechazado: OK\n");
+            imprimir("Contexto de otra tarea rechazado: OK\n");
+        }
+
+        if (user_tasks_cleanup() != 0)
+            ok = 0;
+
+        if (as_count() != 0U ||
+            pmm_free_frames() != before)
+            ok = 0;
+
+        if (ok)
+            imprimir("USER FRAME CHECK: OK\n");
+        else
+            imprimir("USER FRAME CHECK: ERROR\n");
     }
 }
 
