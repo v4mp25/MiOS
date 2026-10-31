@@ -47,5 +47,7 @@ int paging_enable_write_protect(void);
 int paging_write_protect_enabled(void);
 /* Prueba de dos espacios de direcciones */
 int paging_address_spaces_test(void);
+/* Prueba real de cambio de directorios CR3 */
+int paging_cr3_switch_test(void);
 #endif
 

@@ -432,6 +432,7 @@ else if (iguales(linea, "help")) {
     imprimir("threadcleanup\n");
     imprimir("vmmconcurrent\n");
     imprimir("spacetest\n");
+    imprimir("cr3test\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1750,6 +1751,35 @@ else if (iguales(linea, "spacetest")) {
         }
     }
 }
+
+else if (iguales(linea, "cr3test")) {
+    imprimir("=== PRUEBA CAMBIO CR3 ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("Primero ejecuta pagingon.\n");
+    } else {
+        uint32_t libres_antes = pmm_free_frames();
+
+        int resultado = paging_cr3_switch_test();
+
+        if (resultado == 0 &&
+            pmm_free_frames() == libres_antes) {
+
+            imprimir("Directorio A: valor 1111 OK\n");
+            imprimir("Directorio B: valor 2222 OK\n");
+            imprimir("Misma direccion virtual: OK\n");
+            imprimir("Cambio real de CR3: OK\n");
+            imprimir("Restauracion de CR3: OK\n");
+            imprimir("Liberacion de marcos: OK\n");
+            imprimir("CR3 TEST: OK\n");
+        } else {
+            color = 0x0C;
+            imprimir("CR3 TEST: ERROR\n");
+            color = 0x0F;
+        }
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;

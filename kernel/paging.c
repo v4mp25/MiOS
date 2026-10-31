@@ -584,6 +584,169 @@ int vmm_set_writable(uint32_t index, int writable) {
 }
 
 /*
+ * MiOS - Prueba real de cambio CR3.
+ *
+ * Dos directorios distintos.
+ * Misma direccion virtual.
+ * Dos marcos fisicos diferentes.
+ *
+ * Solo para kernel x86 32 bits, una CPU,
+ * mapeo de identidad y 128 MiB de RAM.
+ */
+
+#define SPACE_TEST_VADDR 0x10800000U
+#define SPACE_TEST_PDE   66U
+
+static void cr3_zero_page(uint32_t *ptr) {
+    for (uint32_t i = 0; i < 1024; i++)
+        ptr[i] = 0;
+}
+
+static inline uint32_t cr3_read(void) {
+    uint32_t value;
+
+    __asm__ volatile (
+        "mov %%cr3, %0"
+        : "=r"(value)
+        :
+        : "memory"
+    );
+
+    return value;
+}
+
+static inline void cr3_load(uint32_t address) {
+    __asm__ volatile (
+        "mov %0, %%cr3"
+        :
+        : "r"(address)
+        : "memory"
+    );
+}
+
+int paging_cr3_switch_test(void) {
+    if (!initialized || !paging_cpu_enabled())
+        return -1;
+
+    /*
+     * No cambiar desde un espacio desconocido.
+     */
+    uint32_t original_cr3 = cr3_read();
+
+    if ((original_cr3 & 0xFFFFF000U) !=
+        (uint32_t)(uintptr_t)page_directory)
+        return -1;
+
+    uint32_t frames[6] = {0};
+    uint32_t count = 0;
+    int result = -1;
+
+    /* Reservar seis marcos distintos */
+    for (uint32_t i = 0; i < 6; i++) {
+        if (pmm_alloc_frame(&frames[i]) != 0)
+            goto cleanup;
+
+        count++;
+    }
+
+    uint32_t *dir_a =
+        (uint32_t *)(uintptr_t)frames[0];
+
+    uint32_t *table_a =
+        (uint32_t *)(uintptr_t)frames[1];
+
+    uint32_t *data_a =
+        (uint32_t *)(uintptr_t)frames[2];
+
+    uint32_t *dir_b =
+        (uint32_t *)(uintptr_t)frames[3];
+
+    uint32_t *table_b =
+        (uint32_t *)(uintptr_t)frames[4];
+
+    uint32_t *data_b =
+        (uint32_t *)(uintptr_t)frames[5];
+
+    cr3_zero_page(dir_a);
+    cr3_zero_page(table_a);
+    cr3_zero_page(data_a);
+
+    cr3_zero_page(dir_b);
+    cr3_zero_page(table_b);
+    cr3_zero_page(data_b);
+
+    /* Compartir el mapeo de identidad del kernel */
+    for (uint32_t i = 0; i < PAGE_TABLE_COUNT; i++) {
+        dir_a[i] = page_directory[i];
+        dir_b[i] = page_directory[i];
+    }
+
+    /*
+     * Misma direccion virtual.
+     * Marcos fisicos diferentes.
+     */
+    table_a[0] =
+        frames[2] | PAGE_PRESENT | PAGE_WRITE;
+
+    table_b[0] =
+        frames[5] | PAGE_PRESENT | PAGE_WRITE;
+
+    dir_a[SPACE_TEST_PDE] =
+        frames[1] | PAGE_PRESENT | PAGE_WRITE;
+
+    dir_b[SPACE_TEST_PDE] =
+        frames[4] | PAGE_PRESENT | PAGE_WRITE;
+
+    uint32_t flags = irq_save();
+
+    volatile uint32_t *virtual_ptr =
+        (volatile uint32_t *)(uintptr_t)
+        SPACE_TEST_VADDR;
+
+    /* Activar directorio A */
+    cr3_load(frames[0]);
+    virtual_ptr[0] = 1111U;
+    uint32_t value_a = virtual_ptr[0];
+
+    /* Activar directorio B */
+    cr3_load(frames[3]);
+    virtual_ptr[0] = 2222U;
+    uint32_t value_b = virtual_ptr[0];
+
+    /* Volver a A y verificar que conserva su valor */
+    cr3_load(frames[0]);
+    uint32_t value_a_again = virtual_ptr[0];
+
+    /* Regresar siempre al directorio original */
+    cr3_load(original_cr3);
+    irq_restore(flags);
+
+    if (value_a == 1111U &&
+        value_b == 2222U &&
+        value_a_again == 1111U &&
+        data_a[0] == 1111U &&
+        data_b[0] == 2222U &&
+        frames[2] != frames[5] &&
+        (cr3_read() & 0xFFFFF000U) ==
+            (original_cr3 & 0xFFFFF000U)) {
+
+        result = 0;
+    }
+
+cleanup:
+    /*
+     * Los directorios temporales ya no
+     * estan activos al llegar aqui.
+     */
+    for (uint32_t i = 0; i < count; i++) {
+        if (pmm_free_frame(frames[i]) != 0)
+            result = -1;
+    }
+
+    return result;
+}
+
+/*
  * MiOS - Prueba de espacios de direcciones.
  *
  * Crea dos directorios de paginas diferentes.
