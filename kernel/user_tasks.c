@@ -353,36 +353,45 @@ int user_tasks_context_verify(void) {
  * El contexto debe estar completamente
  * contenido en su pila privilegiada.
  */
+
 int user_task_save_context(
     uint32_t index,
     uint32_t saved_esp
 ) {
-    if (index >= MIOS_USER_TASK_COUNT)
+    if (index >= MIOS_USER_TASK_COUNT) {
         return -1;
+    }
 
     UserTask *task = &tasks[index];
 
-    if (task->state != USER_TASK_READY)
+    if (task->state != USER_TASK_READY) {
         return -1;
+    }
 
     uint32_t stack_top = task->kernel_esp0;
     uint32_t stack_bottom = stack_top - 16384U;
 
-    /* Marco: 17 palabras de 32 bits */
+    /* Comprobar limites de la pila */
     if (saved_esp < stack_bottom ||
         saved_esp > stack_top - 68U ||
-        (saved_esp & 3U) != 0U)
+        (saved_esp & 3U) != 0U) {
         return -1;
-if (user_task_validate_context(index, saved_esp) != 0)
-    return -1;
+    }
+
+    /* Validar los registros y segmentos Ring 3 */
+    if (user_task_validate_context(
+            index,
+            saved_esp
+        ) != 0) {
+        return -1;
+    }
+
+    /* Guardar el contexto validado */
     task->saved_kernel_esp = saved_esp;
+
     return 0;
 }
 
-/*
- * Consultar el contexto que debe
- * restaurarse al seleccionar una tarea.
- */
 int user_task_get_context(
     uint32_t index,
     uint32_t *saved_esp,

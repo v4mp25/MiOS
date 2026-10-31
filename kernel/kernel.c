@@ -20,6 +20,7 @@
 #include "user_scheduler.h"
 #include "user_process.h"
 #include "elf32.h"
+#include "elf_disk.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -885,6 +886,8 @@ extern const uint8_t _binary_user_hola_elf_end[];
 
 static uint8_t elf_test_kernel_stack[16384]
     __attribute__((aligned(16)));
+
+    static uint8_t elf_disk_buffer[MIOS_ELF_DISK_MAX];
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -959,6 +962,7 @@ else if (iguales(linea, "help")) {
     imprimir("elfsegmenttest\n");
     imprimir("elfloadtest\n");
     imprimir("elfruntest\n");
+    imprimir("elfdisktest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4133,6 +4137,70 @@ ring3_enter_at(
     }
 }
 
+
+else if (iguales(linea, "elfdisktest")) {
+    imprimir("=== LECTURA ELF DESDE ATA ===\n");
+
+    uint32_t size = 0;
+    int ok = 1;
+
+    if (elf_disk_read(
+            elf_disk_buffer,
+            sizeof(elf_disk_buffer),
+            &size
+        ) != 0) {
+
+        imprimir("ERROR: lectura binaria ATA.\n");
+        ok = 0;
+    }
+
+    Elf32_LoadInfo info;
+
+    if (ok &&
+        elf32_validate_segments(
+            elf_disk_buffer,
+            size,
+            &info
+        ) != 0) {
+
+        imprimir("ERROR: ELF invalido.\n");
+        ok = 0;
+    }
+
+    /*
+     * Comparacion con el ELF embebido
+     * que ya ejecutamos anteriormente.
+     */
+    if (ok) {
+        uint32_t expected_size =
+            (uint32_t)(
+                _binary_user_hola_elf_end -
+                _binary_user_hola_elf_start
+            );
+
+        if (size != expected_size) {
+            ok = 0;
+        } else {
+            for (uint32_t i = 0; i < size; i++) {
+                if (elf_disk_buffer[i] !=
+                    _binary_user_hola_elf_start[i]) {
+                    ok = 0;
+                    break;
+                }
+            }
+        }
+    }
+
+    if (ok) {
+        imprimir("Lectura multisector ATA: OK\n");
+        imprimir("Tamano ELF completo: OK\n");
+        imprimir("Bytes binarios verificados: OK\n");
+        imprimir("Segmento PT_LOAD: OK\n");
+        imprimir("ELF DISK TEST: OK\n");
+    } else {
+        imprimir("ELF DISK TEST: ERROR\n");
+    }
+}
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
