@@ -592,6 +592,7 @@ else if (iguales(linea, "help")) {
     imprimir("userrrtest\n");
     imprimir("usercontextswitchtest\n");
     imprimir("userframecheck\n");
+    imprimir("usermultitest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2881,6 +2882,131 @@ else if (iguales(linea, "userframecheck")) {
             imprimir("USER FRAME CHECK: OK\n");
         else
             imprimir("USER FRAME CHECK: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "usermultitest")) {
+    imprimir("=== MULTITAREA REAL RING 3 ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0U) {
+
+        imprimir("Activa pagingon y libera espacios.\n");
+
+    } else {
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+
+        if (user_tasks_prepare() != 0) {
+            imprimir("ERROR: preparando tareas.\n");
+            ok = 0;
+        } else {
+            if (user_runtime_start() != 0) {
+                imprimir("ERROR: iniciando planificador.\n");
+                ok = 0;
+            } else {
+                const UserTask *first =
+                    user_task_get(0);
+
+                if (first == 0) {
+                    ok = 0;
+                } else {
+                    uint32_t test_before =
+                        syscall_test_count();
+
+                    uint32_t exit_before =
+                        syscall_exit_count();
+
+                    uint32_t old_esp0 =
+                        tss_get_kernel_stack();
+
+                    uint32_t flags = irq_save();
+
+                    /* Pila privilegiada de tarea 0 */
+                    tss_set_kernel_stack(
+                        first->kernel_esp0
+                    );
+
+                    /*
+                     * Inicia la tarea 0.
+                     * IRQ0 se encargara de alternar
+                     * entre las dos tareas.
+                     */
+                    ring3_enter(
+                        first->cr3,
+                        first->user_esp
+                    );
+
+                    /*
+                     * Volvemos aqui cuando ambas
+                     * tareas ejecutaron SYS_EXIT.
+                     */
+                    tss_set_kernel_stack(old_esp0);
+                    irq_restore(flags);
+
+                    if (user_runtime_error() != 0) {
+                        imprimir("ERROR: cambio de contexto.\n");
+                        ok = 0;
+                    }
+
+                    if (syscall_test_count() !=
+                        test_before + 2U) {
+                        imprimir("ERROR: SYS_TEST.\n");
+                        ok = 0;
+                    }
+
+                    if (syscall_exit_count() !=
+                        exit_before + 2U) {
+                        imprimir("ERROR: SYS_EXIT.\n");
+                        ok = 0;
+                    }
+
+                    if (user_runtime_irq_switches() == 0U) {
+                        imprimir("ERROR: sin cambios por IRQ0.\n");
+                        ok = 0;
+                    }
+
+                    if (user_runtime_active()) {
+                        imprimir("ERROR: tareas activas.\n");
+                        ok = 0;
+                    }
+
+                    if (ok) {
+                        imprimir("Dos programas Ring 3: OK\n");
+                        imprimir("Round Robin por IRQ0: OK\n");
+                        imprimir("Dos SYS_TEST: OK\n");
+                        imprimir("Dos SYS_EXIT: OK\n");
+                        imprimir("Retorno a la shell: OK\n");
+                    }
+                }
+            }
+        }
+
+        /*
+         * Solo liberar despues de volver
+         * al directorio principal.
+         */
+        if (!user_runtime_active()) {
+            if (user_tasks_cleanup() != 0) {
+                imprimir("ERROR: limpieza.\n");
+                ok = 0;
+            }
+        } else {
+            ok = 0;
+        }
+
+        if (as_count() != 0U ||
+            pmm_free_frames() != before) {
+            imprimir("ERROR: memoria no recuperada.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("USER MULTI TEST: OK\n");
+        } else {
+            imprimir("USER MULTI TEST: ERROR\n");
+        }
     }
 }
 

@@ -24,4 +24,23 @@ uint32_t user_rr_switches(void);
 /* Verificar una secuencia de alternancia */
 int user_rr_selftest(void);
 
+/* Iniciar la ejecucion de las dos tareas */
+int user_runtime_start(void);
+
+/* Procesar IRQ0 desde Ring 3 */
+uint32_t user_runtime_tick(uint32_t saved_esp);
+
+/*
+ * Procesar SYS_EXIT desde Ring 3.
+ * Devuelve ESP del siguiente contexto,
+ * o cero si terminaron todas las tareas.
+ */
+uint32_t user_runtime_exit(void);
+
+/* Consultar el estado de ejecucion */
+int user_runtime_active(void);
+
+uint32_t user_runtime_irq_switches(void);
+int user_runtime_error(void);
+
 #endif

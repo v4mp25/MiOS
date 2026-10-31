@@ -11,6 +11,9 @@ global syscall_stub
 extern syscall_dispatch
 extern ring3_exit
 extern syscall_record_origin
+extern user_runtime_active
+extern user_runtime_tick
+extern user_runtime_exit
 syscall_stub:
     ; Guardar segmentos originales
     push ds
@@ -55,12 +58,33 @@ syscall_stub:
 
     ; SYS_EXIT desde Ring 0 conserva
     ; el comportamiento de syscall2test.
+   
     cmp eax, 3
     jne .normal_return
 
-    ; SYS_EXIT desde Ring 3:
-    ; recuperar el contexto de shell.
+    ; La llamada viene de Ring 3.
+    ; Comprobar si hay multitarea activa.
+    call user_runtime_active
+
+    test eax, eax
+    jz .single_task_exit
+
+    ; Finalizar la tarea actual y
+    ; obtener el siguiente contexto.
+    call user_runtime_exit
+
+    ; EAX=0: ya no quedan tareas.
+    test eax, eax
+    jz .single_task_exit
+
+    ; Restaurar la siguiente tarea
+    mov esp, eax
+    jmp .normal_return
+
+.single_task_exit:
+    ; Recuperar la shell original
     jmp ring3_exit
+
 
 .normal_return:
     popad
@@ -169,41 +193,55 @@ irq0_stub:
     test dword [esp + 4], 3
     jz .kernel_irq
 extern user_context_capture
+
 .user_irq:
-    ; Interrupcion procedente de Ring 3.
-    ; Conservar segmentos de usuario.
+    ; Conservar segmentos de usuario
     push ds
     push es
     push fs
     push gs
+
+    ; Guardar registros generales
     pushad
 
-    ; Los controladores C deben ejecutar
-    ; utilizando segmentos del kernel.
+    ; Segmentos del kernel
     mov ax, 0x10
     mov ds, ax
     mov es, ax
     mov fs, ax
     mov gs, ax
 
-    ; Actualizar ticks y enviar EOI.
-    ; TODAVIA no cambiar de tarea.
-     push esp
+    ; Conservar prueba de captura Ring 3
+    push esp
     call user_context_capture
     add esp, 4
 
     ; Actualizar ticks y enviar EOI
     call timer_irq_handler
-   
 
-    ; Restaurar registros del usuario.
+    ; Si no hay multitarea de usuario,
+    ; regresar al mismo programa.
+    call user_runtime_active
+    test eax, eax
+    jz .user_restore
+
+    ; El planificador recibe el marco
+    ; y devuelve el ESP a restaurar.
+    push esp
+    call user_runtime_tick
+    add esp, 4
+
+    ; Cambiar al contexto seleccionado
+    mov esp, eax
+
+.user_restore:
     popad
+
     pop gs
     pop fs
     pop es
     pop ds
 
-    ; Regresar al mismo programa Ring 3.
     iretd
 
 .kernel_irq:

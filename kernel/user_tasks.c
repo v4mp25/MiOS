@@ -488,3 +488,14 @@ int user_task_validate_context(
 
     return 0;
 }
+
+int user_task_mark_done(uint32_t index) {
+    if (index >= MIOS_USER_TASK_COUNT)
+        return -1;
+
+    if (tasks[index].state != USER_TASK_READY)
+        return -1;
+
+    tasks[index].state = USER_TASK_DONE;
+    return 0;
+}

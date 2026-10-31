@@ -8,7 +8,7 @@
 
 #define USER_TASK_FREE  0U
 #define USER_TASK_READY 1U
-
+#define USER_TASK_DONE 2U
 /*
  * Descriptor de una tarea de usuario.
  * Cada tarea administra su propio CR3,
@@ -56,4 +56,5 @@ int user_task_validate_context(
     uint32_t index,
     uint32_t saved_esp
 );
+int user_task_mark_done(uint32_t index);
 #endif
