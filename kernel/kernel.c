@@ -18,6 +18,7 @@
 #include "user_context.h"
 #include "user_tasks.h"
 #include "user_scheduler.h"
+#include "user_process.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -593,6 +594,7 @@ else if (iguales(linea, "help")) {
     imprimir("usercontextswitchtest\n");
     imprimir("userframecheck\n");
     imprimir("usermultitest\n");
+    imprimir("userproctest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -3066,6 +3068,57 @@ if (user_runtime_active() ||
     }
 }
 
+
+else if (iguales(linea, "userproctest")) {
+    imprimir("=== PROCESOS DE USUARIO MIOS ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0U ||
+        user_process_count() != 0U) {
+
+        imprimir("Activa pagingon y libera espacios.\n");
+
+    } else {
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+
+        if (user_process_prepare() != 0) {
+            imprimir("ERROR: creando procesos.\n");
+            ok = 0;
+        } else {
+            if (user_process_verify() != 0) {
+                imprimir("ERROR: verificando procesos.\n");
+                ok = 0;
+            } else {
+                imprimir("Dos PID asignados: OK\n");
+                imprimir("Procesos registrados: OK\n");
+                imprimir("CR3 independientes: OK\n");
+                imprimir("Asociacion PID - tarea: OK\n");
+            }
+        }
+
+        if (user_process_cleanup() != 0) {
+            imprimir("ERROR: limpieza de procesos.\n");
+            ok = 0;
+        }
+
+        if (user_process_count() != 0U ||
+            as_count() != 0U ||
+            pmm_free_frames() != before) {
+
+            imprimir("ERROR: recursos pendientes.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Tabla de procesos liberada: OK\n");
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("USER PROC TEST: OK\n");
+        } else {
+            imprimir("USER PROC TEST: ERROR\n");
+        }
+    }
+}
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
