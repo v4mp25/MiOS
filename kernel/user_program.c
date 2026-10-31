@@ -27,18 +27,46 @@
  * ud2              ; Error si SYS_EXIT retorna
  */
 
+
+/*
+ * Programa Ring 3 de prueba.
+ *
+ * 1. SYS_TEST
+ * 2. Bucle de calculo en modo usuario
+ * 3. SYS_EXIT
+ * 4. UD2 si la salida falla
+ */
 static const uint8_t program_code[] = {
-    /* SYS_TEST */
+
+    /* mov eax, 1 : SYS_TEST */
     0xB8, 0x01, 0x00, 0x00, 0x00,
+
+    /* int 0x80 */
     0xCD, 0x80,
 
-    /* SYS_EXIT */
+    /*
+     * mov ecx, 100000000
+     * Bucle suficientemente largo
+     * para probar IRQ0.
+     */
+    0xB9, 0x00, 0xE1, 0xF5, 0x05,
+
+    /* dec ecx */
+    0x49,
+
+    /* jnz hacia dec ecx */
+    0x75, 0xFD,
+
+    /* mov eax, 2 : SYS_EXIT */
     0xB8, 0x02, 0x00, 0x00, 0x00,
+
+    /* int 0x80 */
     0xCD, 0x80,
 
-    /* No debe ejecutarse */
+    /* ud2: SYS_EXIT no debe regresar */
     0x0F, 0x0B
 };
+
 
 
 int user_program_prepare(uint32_t physical_frame) {

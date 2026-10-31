@@ -155,19 +155,65 @@ global yield_stub
 extern timer_irq_dispatch
 extern scheduler_on_yield
 
+
 irq0_stub:
     cld
+
+    ; Al entrar, la CPU guarda:
+    ; [ESP+0] = EIP
+    ; [ESP+4] = CS
+    ; [ESP+8] = EFLAGS
+    ;
+    ; Verificar el nivel de privilegio
+    ; que tenia el codigo interrumpido.
+    test dword [esp + 4], 3
+    jz .kernel_irq
+
+.user_irq:
+    ; Interrupcion procedente de Ring 3.
+    ; Conservar segmentos de usuario.
+    push ds
+    push es
+    push fs
+    push gs
+    pushad
+
+    ; Los controladores C deben ejecutar
+    ; utilizando segmentos del kernel.
+    mov ax, 0x10
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+
+    ; Actualizar ticks y enviar EOI.
+    ; TODAVIA no cambiar de tarea.
+    call timer_irq_handler
+
+    ; Restaurar registros del usuario.
+    popad
+    pop gs
+    pop fs
+    pop es
+    pop ds
+
+    ; Regresar al mismo programa Ring 3.
+    iretd
+
+.kernel_irq:
+    ; Mantener intacto el funcionamiento
+    ; original del Round Robin del kernel.
     pushad
 
     push esp
     call timer_irq_dispatch
     add esp, 4
 
-    ; EAX contiene el ESP seleccionado.
     mov esp, eax
 
     popad
     iretd
+
 
 ; Interrupcion de software para
 ; permitir un yield voluntario.

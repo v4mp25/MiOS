@@ -2469,7 +2469,7 @@ else if (iguales(linea, "ring3test")) {
 
                 uint32_t exits_before =
                     syscall_exit_count();
-
+uint32_t ticks_before = timer_get_ticks();
                 uint32_t old_esp0 =
                     tss_get_kernel_stack();
 
@@ -2505,6 +2505,16 @@ else if (iguales(linea, "ring3test")) {
                 tss_set_kernel_stack(old_esp0);
 
                 irq_restore(flags);
+                
+uint32_t ticks_after = timer_get_ticks();
+
+if ((uint32_t)(ticks_after - ticks_before) > 0U) {
+    imprimir("IRQ0 durante Ring 3: OK\n");
+} else {
+    imprimir("IRQ0 durante Ring 3: NO DETECTADA\n");
+    ok = 0;
+}
+
 
                 if (syscall_test_count() !=
                     tests_before + 1U) {

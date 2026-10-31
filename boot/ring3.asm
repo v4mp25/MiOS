@@ -40,7 +40,7 @@ ring3_enter:
     ; SS, ESP, EFLAGS, CS, EIP
     push dword 0x23
     push dword [ebp + 12]
-    push dword 0x00000002
+    push dword 0x00000202
     push dword 0x1B
     push dword 0x10800000
 
