@@ -3380,6 +3380,48 @@ else if (iguales(linea, "userpidtest")) {
                         imprimir("ERROR: finalizaciones.\n");
                         ok = 0;
                     }
+                    
+/*
+ * Comprobar las syscalls realizadas
+ * por cada uno de los dos procesos.
+ */
+SyscallAudit audit0;
+SyscallAudit audit1;
+
+UserProcess process0;
+UserProcess process1;
+
+if (syscall_audit_get(0, &audit0) != 0 ||
+    syscall_audit_get(1, &audit1) != 0 ||
+    user_process_get_at(0, &process0) != 0 ||
+    user_process_get_at(1, &process1) != 0) {
+
+    imprimir("ERROR: consultando auditoria.\n");
+    ok = 0;
+
+} else if (
+    audit0.pid != process0.pid ||
+    audit1.pid != process1.pid ||
+    audit0.pid == audit1.pid ||
+    audit0.test_calls != 1U ||
+    audit1.test_calls != 1U ||
+    audit0.exit_calls != 1U ||
+    audit1.exit_calls != 1U
+) {
+
+    imprimir("ERROR: syscalls por PID.\n");
+    ok = 0;
+
+} else {
+    imprimir("SYS_TEST del proceso 0: OK\n");
+    imprimir("SYS_EXIT del proceso 0: OK\n");
+
+    imprimir("SYS_TEST del proceso 1: OK\n");
+    imprimir("SYS_EXIT del proceso 1: OK\n");
+
+    imprimir("Identidad PID en syscalls: OK\n");
+}
+
 
                     if (user_runtime_irq_switches() == 0U) {
                         imprimir("ERROR: sin alternancia IRQ0.\n");
