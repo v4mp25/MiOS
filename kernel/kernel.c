@@ -17,6 +17,7 @@
 #include "ring3.h"
 #include "user_context.h"
 #include "user_tasks.h"
+#include "user_scheduler.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -588,6 +589,7 @@ else if (iguales(linea, "help")) {
     imprimir("ring3test\n");
     imprimir("ring3verify\n");
     imprimir("usertasktest\n");
+    imprimir("userrrtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2653,6 +2655,62 @@ else if (iguales(linea, "usertasktest")) {
         }
     }
 }
+
+else if (iguales(linea, "userrrtest")) {
+    imprimir("=== ROUND ROBIN DE USUARIO ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("ERROR: ejecuta pagingon.\n");
+    } else if (as_count() != 0U) {
+        imprimir("ERROR: hay espacios activos.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+
+        /* Crear las dos tareas */
+        if (user_tasks_prepare() != 0) {
+            imprimir("ERROR: preparando tareas.\n");
+            ok = 0;
+        } else {
+            if (user_tasks_verify() != 0) {
+                imprimir("ERROR: tareas invalidas.\n");
+                ok = 0;
+            } else {
+                imprimir("Dos tareas READY: OK\n");
+
+                /* Probar la seleccion Round Robin */
+                if (user_rr_selftest() == 0) {
+                    imprimir("Alternancia 0-1-0-1: OK\n");
+                    imprimir("Conteo de cambios: OK\n");
+                    imprimir("Planificador usuario: OK\n");
+                } else {
+                    imprimir("ERROR: Round Robin.\n");
+                    ok = 0;
+                }
+            }
+        }
+
+        /* Liberar los espacios creados */
+        if (user_tasks_cleanup() != 0) {
+            imprimir("ERROR: limpieza.\n");
+            ok = 0;
+        }
+
+        if (as_count() != 0U ||
+            pmm_free_frames() != before) {
+            imprimir("ERROR: memoria no recuperada.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("USER RR TEST: OK\n");
+        } else {
+            imprimir("USER RR TEST: ERROR\n");
+        }
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
