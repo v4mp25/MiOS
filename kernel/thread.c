@@ -4,6 +4,7 @@
 #include "thread.h"
 #include "memory.h"
 #include "irq.h"
+#include "paging.h"
 #define THREAD_FREE  0
 #define THREAD_READY 1
 #define THREAD_DONE  2
@@ -12,6 +13,7 @@
 
 typedef struct {
     uint32_t esp;
+    uint32_t cr3;
     void (*function)(void);
     void *stack;
     int state;
@@ -117,6 +119,7 @@ void thread_init(void) {
     if (!scheduler_running) {
         for (int i = 0; i < MIOS_MAX_THREADS; i++) {
             threads[i].esp = 0;
+            threads[i].cr3 = 0;
             threads[i].function = NULL;
             threads[i].stack = NULL;
             threads[i].state = THREAD_FREE;
@@ -170,7 +173,13 @@ int thread_create(void (*function)(void)) {
         *(--sp) = 0; /* EDI */
 
         threads[i].esp = (uint32_t)sp;
-        threads[i].function = function;
+
+/* Por defecto, utilizar el espacio del kernel */
+threads[i].cr3 = paging_cpu_enabled()
+    ? paging_directory_address()
+    : 0;
+
+threads[i].function = function;
         threads[i].stack = stack;
         threads[i].state = THREAD_READY;
 
@@ -270,6 +279,7 @@ int thread_run(void) {
 
         threads[i].stack = NULL;
         threads[i].function = NULL;
+        threads[i].cr3 = 0;
         threads[i].esp = 0;
         threads[i].state = THREAD_FREE;
     }
@@ -323,9 +333,61 @@ int thread_destroy(int tid) {
     }
 
     threads[tid].esp = 0;
+    
     threads[tid].function = NULL;
     threads[tid].stack = NULL;
+    threads[tid].cr3 = 0;
     threads[tid].state = THREAD_FREE;
+
+    irq_restore(flags);
+    return 0;
+}
+
+/*
+ * Asociar un directorio de paginas
+ * a un hilo que todavia no ha comenzado.
+ *
+ * Esta funcion no cambia CR3 en la CPU.
+ */
+int thread_bind_cr3(int tid, uint32_t cr3) {
+    uint32_t flags = irq_save();
+
+    if (tid < 0 ||
+        tid >= MIOS_MAX_THREADS ||
+        scheduler_running ||
+        threads[tid].state != THREAD_READY ||
+        !paging_cpu_enabled() ||
+        cr3 == 0 ||
+        (cr3 & 0xFFFU) != 0) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    threads[tid].cr3 = cr3;
+
+    irq_restore(flags);
+    return 0;
+}
+
+/*
+ * Consultar el CR3 registrado.
+ *
+ * No necesariamente es el CR3 activo.
+ */
+int thread_get_cr3(int tid, uint32_t *out) {
+    uint32_t flags = irq_save();
+
+    if (tid < 0 ||
+        tid >= MIOS_MAX_THREADS ||
+        out == NULL ||
+        threads[tid].state == THREAD_FREE) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    *out = threads[tid].cr3;
 
     irq_restore(flags);
     return 0;

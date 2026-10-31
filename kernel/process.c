@@ -86,12 +86,47 @@ int process_create(
         void (*wrapper)(void) =
             (i == 0) ? process_entry_0 : process_entry_1;
 
-        int tid = thread_create(wrapper);
+        
+int tid = thread_create(wrapper);
 
-        if (tid < 0) {
-            as_destroy((uint32_t)asid);
-            return -1;
-        }
+if (tid < 0) {
+    as_destroy((uint32_t)asid);
+    return -1;
+}
+
+/* Consultar el directorio del espacio creado */
+uint32_t process_cr3 = 0;
+uint32_t private_frame = 0;
+
+if (as_get(
+        (uint32_t)asid,
+        &process_cr3,
+        &private_frame
+    ) != 0) {
+
+    thread_destroy(tid);
+    as_destroy((uint32_t)asid);
+    return -1;
+}
+
+/* Vincular el hilo con su directorio */
+if (thread_bind_cr3(tid, process_cr3) != 0) {
+    thread_destroy(tid);
+    as_destroy((uint32_t)asid);
+    return -1;
+}
+
+/* Verificar que la asociacion se guardo */
+uint32_t recorded_cr3 = 0;
+
+if (thread_get_cr3(tid, &recorded_cr3) != 0 ||
+    recorded_cr3 != process_cr3) {
+
+    thread_destroy(tid);
+    as_destroy((uint32_t)asid);
+    return -1;
+}
+
 
         processes[i].info.pid = next_pid++;
         processes[i].info.asid = (uint32_t)asid;
