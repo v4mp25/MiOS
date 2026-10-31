@@ -15,6 +15,7 @@
 #include "syscall.h"
 #include "user_program.h"
 #include "ring3.h"
+#include "user_context.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -2469,6 +2470,7 @@ else if (iguales(linea, "ring3test")) {
 
                 uint32_t exits_before =
                     syscall_exit_count();
+                    user_context_reset();
 uint32_t ticks_before = timer_get_ticks();
                 uint32_t old_esp0 =
                     tss_get_kernel_stack();
@@ -2514,6 +2516,21 @@ if ((uint32_t)(ticks_after - ticks_before) > 0U) {
     imprimir("IRQ0 durante Ring 3: NO DETECTADA\n");
     ok = 0;
 }
+
+/* Verificar el contexto registrado por IRQ0 */
+if (user_context_count() > 0U &&
+    user_context_verify(user_cr3)) {
+
+    imprimir("Contexto Ring 3 capturado: OK\n");
+    imprimir("CS y SS de usuario: OK\n");
+    imprimir("EIP y ESP de usuario: OK\n");
+    imprimir("CR3 del proceso: OK\n");
+
+} else {
+    imprimir("USER CONTEXT TEST: ERROR\n");
+    ok = 0;
+}
+
 
 
                 if (syscall_test_count() !=

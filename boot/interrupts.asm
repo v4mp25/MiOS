@@ -168,7 +168,7 @@ irq0_stub:
     ; que tenia el codigo interrumpido.
     test dword [esp + 4], 3
     jz .kernel_irq
-
+extern user_context_capture
 .user_irq:
     ; Interrupcion procedente de Ring 3.
     ; Conservar segmentos de usuario.
@@ -188,7 +188,13 @@ irq0_stub:
 
     ; Actualizar ticks y enviar EOI.
     ; TODAVIA no cambiar de tarea.
+     push esp
+    call user_context_capture
+    add esp, 4
+
+    ; Actualizar ticks y enviar EOI
     call timer_irq_handler
+   
 
     ; Restaurar registros del usuario.
     popad
