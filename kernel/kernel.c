@@ -590,6 +590,7 @@ else if (iguales(linea, "help")) {
     imprimir("ring3verify\n");
     imprimir("usertasktest\n");
     imprimir("userrrtest\n");
+    imprimir("usercontextswitchtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2720,6 +2721,72 @@ else if (iguales(linea, "userrrtest")) {
         } else {
             imprimir("USER RR TEST: ERROR\n");
         }
+    }
+}
+
+else if (iguales(linea, "usercontextswitchtest")) {
+    imprimir("=== CONTEXTOS PARA ROUND ROBIN ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0U) {
+        imprimir("Activa pagingon y libera espacios.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+
+        if (user_tasks_prepare() != 0) {
+            ok = 0;
+        } else {
+            if (user_tasks_verify() != 0 ||
+                user_tasks_context_verify() != 0) {
+                ok = 0;
+            }
+
+            if (ok) {
+                for (uint32_t i = 0; i < 2U; i++) {
+                    const UserTask *task =
+                        user_task_get(i);
+
+                    uint32_t esp = 0;
+                    uint32_t cr3 = 0;
+                    uint32_t esp0 = 0;
+
+                    if (task == 0 ||
+                        user_task_get_context(
+                            i, &esp, &cr3, &esp0
+                        ) != 0 ||
+                        esp != task->saved_kernel_esp ||
+                        cr3 != task->cr3 ||
+                        esp0 != task->kernel_esp0 ||
+                        user_task_save_context(
+                            i, esp
+                        ) != 0) {
+                        ok = 0;
+                        break;
+                    }
+                }
+            }
+        }
+
+        if (ok) {
+            imprimir("Contexto tarea 0: OK\n");
+            imprimir("Contexto tarea 1: OK\n");
+            imprimir("ESP guardados: OK\n");
+            imprimir("CR3 independientes: OK\n");
+            imprimir("ESP0 independientes: OK\n");
+        }
+
+        if (user_tasks_cleanup() != 0)
+            ok = 0;
+
+        if (as_count() != 0U ||
+            pmm_free_frames() != before)
+            ok = 0;
+
+        if (ok)
+            imprimir("USER CONTEXT SWITCH TEST: OK\n");
+        else
+            imprimir("USER CONTEXT SWITCH TEST: ERROR\n");
     }
 }
 

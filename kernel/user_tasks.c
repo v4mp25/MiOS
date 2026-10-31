@@ -345,3 +345,71 @@ int user_tasks_context_verify(void) {
 
     return 0;
 }
+
+/*
+ * Guardar la posicion del contexto
+ * de una tarea de usuario.
+ *
+ * El contexto debe estar completamente
+ * contenido en su pila privilegiada.
+ */
+int user_task_save_context(
+    uint32_t index,
+    uint32_t saved_esp
+) {
+    if (index >= MIOS_USER_TASK_COUNT)
+        return -1;
+
+    UserTask *task = &tasks[index];
+
+    if (task->state != USER_TASK_READY)
+        return -1;
+
+    uint32_t stack_top = task->kernel_esp0;
+    uint32_t stack_bottom = stack_top - 16384U;
+
+    /* Marco: 17 palabras de 32 bits */
+    if (saved_esp < stack_bottom ||
+        saved_esp > stack_top - 68U ||
+        (saved_esp & 3U) != 0U)
+        return -1;
+
+    task->saved_kernel_esp = saved_esp;
+    return 0;
+}
+
+/*
+ * Consultar el contexto que debe
+ * restaurarse al seleccionar una tarea.
+ */
+int user_task_get_context(
+    uint32_t index,
+    uint32_t *saved_esp,
+    uint32_t *cr3,
+    uint32_t *kernel_esp0
+) {
+    if (index >= MIOS_USER_TASK_COUNT ||
+        saved_esp == 0 ||
+        cr3 == 0 ||
+        kernel_esp0 == 0)
+        return -1;
+
+    const UserTask *task = &tasks[index];
+
+    if (task->state != USER_TASK_READY ||
+        task->saved_kernel_esp == 0U)
+        return -1;
+
+    uint32_t bottom = task->kernel_esp0 - 16384U;
+
+    if (task->saved_kernel_esp < bottom ||
+        task->saved_kernel_esp >
+            task->kernel_esp0 - 68U)
+        return -1;
+
+    *saved_esp = task->saved_kernel_esp;
+    *cr3 = task->cr3;
+    *kernel_esp0 = task->kernel_esp0;
+
+    return 0;
+}
