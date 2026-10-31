@@ -22,5 +22,6 @@ int thread_bind_cr3(int tid, uint32_t cr3);
 
 /* Consultar el CR3 asociado a un hilo */
 int thread_get_cr3(int tid, uint32_t *out);
+int thread_tss_stack_ok(void);
 #endif
 

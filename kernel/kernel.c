@@ -492,6 +492,25 @@ static void mostrar_gdt(void) {
     imprimir_numero(cs & 3U);
     imprimir("\n");
 }
+
+static volatile uint32_t tss_test_ok[2];
+
+static void tss_test_task1(void) {
+    tss_test_ok[0] = thread_tss_stack_ok() ? 1U : 0U;
+    thread_yield();
+
+    if (!thread_tss_stack_ok())
+        tss_test_ok[0] = 0;
+}
+
+static void tss_test_task2(void) {
+    tss_test_ok[1] = thread_tss_stack_ok() ? 1U : 0U;
+    thread_yield();
+
+    if (!thread_tss_stack_ok())
+        tss_test_ok[1] = 0;
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -546,6 +565,7 @@ else if (iguales(linea, "help")) {
     imprimir("gdtinfo\n");
     imprimir("gdtcheck\n");
     imprimir("tsscheck\n");
+    imprimir("tssstacktest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2109,6 +2129,42 @@ else if (iguales(linea, "tsscheck")) {
         imprimir("TSS CHECK: ERROR\n");
     }
 }
+
+else if (iguales(linea, "tssstacktest")) {
+    imprimir("=== PRUEBA TSS POR HILO ===\n");
+
+    tss_test_ok[0] = 0;
+    tss_test_ok[1] = 0;
+
+    int a = thread_create(tss_test_task1);
+    int b = thread_create(tss_test_task2);
+
+    if (a < 0 || b < 0) {
+        if (a >= 0)
+            thread_destroy(a);
+
+        if (b >= 0)
+            thread_destroy(b);
+
+        imprimir("ERROR: creacion de hilos.\n");
+    } else {
+        int result = thread_run();
+
+        if (result == 0 &&
+            tss_test_ok[0] == 1 &&
+            tss_test_ok[1] == 1 &&
+            tss_verify()) {
+
+            imprimir("Pila del hilo 1: OK\n");
+            imprimir("Pila del hilo 2: OK\n");
+            imprimir("TSS restaurada: OK\n");
+            imprimir("TSS STACK TEST: OK\n");
+        } else {
+            imprimir("TSS STACK TEST: ERROR\n");
+        }
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;

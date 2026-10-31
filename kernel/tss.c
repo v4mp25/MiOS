@@ -115,3 +115,16 @@ int tss_verify(void) {
            kernel_tss.esp0 != 0 &&
            kernel_tss.iomap_base == sizeof(TSS32);
 }
+
+/* Consultar el ESP0 actual de la TSS */
+uint32_t tss_get_kernel_stack(void) {
+    return kernel_tss.esp0;
+}
+
+/* Restaurar la pila provisional inicial */
+void tss_reset_kernel_stack(void) {
+    kernel_tss.esp0 =
+        (uint32_t)(uintptr_t)
+        (initial_kernel_stack +
+         sizeof(initial_kernel_stack));
+}

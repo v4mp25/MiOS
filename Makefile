@@ -64,7 +64,7 @@ interrupts_c.o: kernel/interrupts.c include/interrupts.h
 	$(CC) $(CFLAGS) -c kernel/interrupts.c -o interrupts_c.o
 memory_map.o: kernel/memory_map.c include/memory_map.h
 	$(CC) $(CFLAGS) -c kernel/memory_map.c -o memory_map.o
-thread.o: kernel/thread.c include/thread.h include/memory.h include/paging.h
+thread.o: kernel/thread.c include/thread.h include/memory.h include/irq.h include/paging.h include/tss.h
 	$(CC) $(CFLAGS) -c kernel/thread.c -o thread.o
 
 thread_switch.o: boot/thread_switch.asm

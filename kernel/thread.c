@@ -5,19 +5,26 @@
 #include "memory.h"
 #include "irq.h"
 #include "paging.h"
+#include "tss.h"
 #define THREAD_FREE  0
 #define THREAD_READY 1
 #define THREAD_DONE  2
 
 #define QUANTUM_TICKS 5U
 
+
 typedef struct {
     uint32_t esp;
     uint32_t cr3;
+
+    /* Limite superior de la pila del hilo */
+    uint32_t kernel_stack_top;
+
     void (*function)(void);
     void *stack;
     int state;
 } Thread;
+
 
 static Thread threads[MIOS_MAX_THREADS];
 
@@ -112,6 +119,9 @@ static void thread_finish(void) {
 
     if (next >= 0) {
         current_thread = next;
+        tss_set_kernel_stack(
+    threads[next].kernel_stack_top
+);
 
         uint32_t next_cr3 = thread_target_cr3(next);
 
@@ -128,7 +138,7 @@ static void thread_finish(void) {
      * Regresar al directorio principal.
      */
     current_thread = -1;
-
+tss_reset_kernel_stack();
   if (paging_cpu_enabled() &&
     thread_read_cr3() != main_cr3) {
     thread_load_cr3(main_cr3);
@@ -175,6 +185,7 @@ void thread_init(void) {
             threads[i].function = NULL;
             threads[i].stack = NULL;
             threads[i].state = THREAD_FREE;
+            threads[i].kernel_stack_top = 0;
         }
 
         main_esp = 0;
@@ -226,6 +237,8 @@ int thread_create(void (*function)(void)) {
         *(--sp) = 0; /* EDI */
 
         threads[i].esp = (uint32_t)sp;
+        threads[i].kernel_stack_top =
+    (uint32_t)top;
 
 /* Por defecto, utilizar el espacio del kernel */
 threads[i].cr3 = paging_cpu_enabled()
@@ -263,6 +276,9 @@ static uint32_t schedule_from_irq(uint32_t esp) {
 
     /* Seleccionar siguiente hilo */
     current_thread = next;
+    tss_set_kernel_stack(
+    threads[next].kernel_stack_top
+);
 
     uint32_t next_cr3 = thread_target_cr3(next);
 
@@ -329,7 +345,9 @@ int thread_run(void) {
 
     scheduler_running = 1;
     current_thread = first;
-
+tss_set_kernel_stack(
+    threads[first].kernel_stack_top
+);
     /* Seleccionar CR3 del primer hilo */
     uint32_t first_cr3 = thread_target_cr3(first);
 
@@ -358,7 +376,7 @@ int thread_run(void) {
             __asm__ volatile ("hlt");
         }
     }
-
+tss_reset_kernel_stack();
     /* Restaurar el planificador */
     scheduler_running = 0;
     current_thread = -1;
@@ -378,6 +396,7 @@ int thread_run(void) {
         threads[i].stack = NULL;
         threads[i].function = NULL;
         threads[i].cr3 = 0;
+        threads[i].kernel_stack_top = 0;
         threads[i].esp = 0;
         threads[i].state = THREAD_FREE;
     }
@@ -437,7 +456,7 @@ int thread_destroy(int tid) {
     threads[tid].stack = NULL;
     threads[tid].cr3 = 0;
     threads[tid].state = THREAD_FREE;
-
+threads[tid].kernel_stack_top = 0;
     irq_restore(flags);
     return 0;
 }
@@ -491,3 +510,27 @@ int thread_get_cr3(int tid, uint32_t *out) {
     irq_restore(flags);
     return 0;
 }
+
+/* Verifica que ESP0 corresponda al hilo actual */
+int thread_tss_stack_ok(void) {
+    uint32_t flags = irq_save();
+
+    if (!scheduler_running ||
+        current_thread < 0 ||
+        current_thread >= MIOS_MAX_THREADS) {
+
+        irq_restore(flags);
+        return 0;
+    }
+
+    uint32_t expected =
+        threads[current_thread].kernel_stack_top;
+
+    int ok =
+        expected != 0 &&
+        tss_get_kernel_stack() == expected;
+
+    irq_restore(flags);
+    return ok;
+}
+
