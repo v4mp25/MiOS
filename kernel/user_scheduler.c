@@ -118,7 +118,8 @@ int user_rr_selftest(void) {
 static int runtime_active = 0;
 static int runtime_error = 0;
 static uint32_t runtime_irq_switches = 0;
-
+static uint32_t runtime_task_exits[MIOS_USER_TASK_COUNT];
+static uint32_t runtime_total_exits = 0;
 static void runtime_load_address_space(
     uint32_t cr3,
     uint32_t esp0
@@ -165,6 +166,11 @@ int user_runtime_start(void) {
 
     runtime_error = 0;
     runtime_irq_switches = 0;
+    runtime_total_exits = 0;
+
+for (uint32_t i = 0; i < MIOS_USER_TASK_COUNT; i++) {
+    runtime_task_exits[i] = 0;
+}
 
     int first = user_rr_next();
 
@@ -274,7 +280,9 @@ uint32_t user_runtime_exit(void) {
         runtime_active = 0;
         return 0;
     }
-
+/* La tarea actual terminó correctamente */
+runtime_task_exits[previous]++;
+runtime_total_exits++;
     int next = user_rr_next();
 
     if (next < 0) {
@@ -307,3 +315,24 @@ uint32_t user_runtime_exit(void) {
     return next_esp;
 }
 
+
+uint32_t user_runtime_task_exits(uint32_t index) {
+    if (index >= MIOS_USER_TASK_COUNT)
+        return 0;
+
+    uint32_t flags = irq_save();
+
+    uint32_t result = runtime_task_exits[index];
+
+    irq_restore(flags);
+    return result;
+}
+
+uint32_t user_runtime_total_exits(void) {
+    uint32_t flags = irq_save();
+
+    uint32_t result = runtime_total_exits;
+
+    irq_restore(flags);
+    return result;
+}

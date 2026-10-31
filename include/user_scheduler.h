@@ -42,5 +42,9 @@ int user_runtime_active(void);
 
 uint32_t user_runtime_irq_switches(void);
 int user_runtime_error(void);
+/* Cantidad de salidas por tarea */
+uint32_t user_runtime_task_exits(uint32_t index);
 
+/* Cantidad total de tareas finalizadas */
+uint32_t user_runtime_total_exits(void);
 #endif

@@ -2960,6 +2960,34 @@ else if (iguales(linea, "usermultitest")) {
                         imprimir("ERROR: SYS_EXIT.\n");
                         ok = 0;
                     }
+                    
+/* Verificar la finalizacion individual */
+const UserTask *task0 = user_task_get(0);
+const UserTask *task1 = user_task_get(1);
+
+if (task0 == 0 || task1 == 0 ||
+    task0->state != USER_TASK_DONE ||
+    task1->state != USER_TASK_DONE) {
+
+    imprimir("ERROR: estados de tareas.\n");
+    ok = 0;
+} else {
+    imprimir("Estados DONE de ambas tareas: OK\n");
+}
+
+/* Cada tarea debe ejecutar SYS_EXIT una vez */
+if (user_runtime_task_exits(0) != 1U ||
+    user_runtime_task_exits(1) != 1U ||
+    user_runtime_total_exits() != 2U) {
+
+    imprimir("ERROR: conteo de finalizaciones.\n");
+    ok = 0;
+} else {
+    imprimir("Finalizacion tarea 0: OK\n");
+    imprimir("Finalizacion tarea 1: OK\n");
+    imprimir("SYS_EXIT sin duplicados: OK\n");
+}
+
 
                     if (user_runtime_irq_switches() == 0U) {
                         imprimir("ERROR: sin cambios por IRQ0.\n");
@@ -2986,14 +3014,42 @@ else if (iguales(linea, "usermultitest")) {
          * Solo liberar despues de volver
          * al directorio principal.
          */
-        if (!user_runtime_active()) {
-            if (user_tasks_cleanup() != 0) {
-                imprimir("ERROR: limpieza.\n");
-                ok = 0;
-            }
-        } else {
-            ok = 0;
-        }
+        
+/*
+ * Antes de destruir recursos,
+ * comprobar que volvimos al
+ * directorio principal del kernel.
+ */
+uint32_t current_cr3 = 0;
+
+__asm__ volatile (
+    "mov %%cr3, %0"
+    : "=r"(current_cr3)
+    :
+    : "memory"
+);
+
+current_cr3 &= 0xFFFFF000U;
+
+if (user_runtime_active() ||
+    current_cr3 != paging_directory_address()) {
+
+    imprimir("ERROR: retorno inseguro al kernel.\n");
+    ok = 0;
+
+    /*
+     * No liberar marcos potencialmente
+     * utilizados por la CPU.
+     */
+} else {
+    imprimir("CR3 principal restaurado: OK\n");
+
+    if (user_tasks_cleanup() != 0) {
+        imprimir("ERROR: limpieza de tareas.\n");
+        ok = 0;
+    }
+}
+
 
         if (as_count() != 0U ||
             pmm_free_frames() != before) {
