@@ -126,6 +126,12 @@ if (thread_get_cr3(tid, &recorded_cr3) != 0 ||
     as_destroy((uint32_t)asid);
     return -1;
 }
+/* Registrar que este proceso utiliza el espacio */
+if (as_acquire((uint32_t)asid) != 0) {
+    thread_destroy(tid);
+    as_destroy((uint32_t)asid);
+    return -1;
+}
 
 
         processes[i].info.pid = next_pid++;
@@ -157,10 +163,17 @@ int process_run(void) {
         if (processes[i].info.state == PROCESS_TERMINATED &&
             processes[i].info.asid != 0) {
 
-            if (as_destroy(processes[i].info.asid) != 0)
-                return -1;
+            uint32_t asid = processes[i].info.asid;
 
-            processes[i].info.asid = 0;
+/* El hilo ya termino: retirar la referencia */
+if (as_release(asid) != 0)
+    return -1;
+
+/* Ahora se puede destruir el espacio */
+if (as_destroy(asid) != 0)
+    return -1;
+
+processes[i].info.asid = 0;
         }
     }
 

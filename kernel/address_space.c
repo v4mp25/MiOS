@@ -18,6 +18,7 @@ typedef struct {
     uint32_t directory_frame;
     uint32_t table_frame;
     uint32_t data_frame;
+    uint32_t users;
 } AddressSpace;
 
 static AddressSpace spaces[MIOS_AS_MAX];
@@ -49,6 +50,7 @@ void as_init(void) {
         spaces[i].directory_frame = 0;
         spaces[i].table_frame = 0;
         spaces[i].data_frame = 0;
+        spaces[i].users = 0;
     }
 }
 
@@ -142,6 +144,7 @@ int as_create(void) {
     spaces[slot].directory_frame = dir;
     spaces[slot].table_frame = table;
     spaces[slot].data_frame = data;
+    spaces[slot].users = 0;
     spaces[slot].used = 1;
 
     irq_restore(flags);
@@ -165,9 +168,11 @@ fail:
     return -1;
 }
 
+
 int as_destroy(uint32_t id) {
     uint32_t flags = irq_save();
 
+    /* Verificar que el ID sea valido */
     if (id == 0 || id > MIOS_AS_MAX) {
         irq_restore(flags);
         return -1;
@@ -175,14 +180,24 @@ int as_destroy(uint32_t id) {
 
     AddressSpace *s = &spaces[id - 1];
 
+    /* Comprobar que el espacio existe */
     if (!s->used) {
         irq_restore(flags);
         return -1;
     }
 
     /*
+     * No destruir espacios que todavia
+     * estan asociados a procesos o hilos.
+     */
+    if (s->users != 0) {
+        irq_restore(flags);
+        return -2;
+    }
+
+    /*
      * Nunca destruir el directorio
-     * utilizado actualmente por la CPU.
+     * que esta utilizando la CPU.
      */
     if (read_cr3() == s->directory_frame) {
         irq_restore(flags);
@@ -190,45 +205,59 @@ int as_destroy(uint32_t id) {
     }
 
     /*
-     * Este modulo aun no permite
-     * ejecutar procesos en sus espacios.
+     * La destruccion solo se permite
+     * desde el espacio principal del kernel.
      */
     if (read_cr3() != paging_directory_address()) {
         irq_restore(flags);
         return -2;
     }
 
+    /*
+     * La pagina privada debe tener exactamente
+     * una referencia registrada.
+     */
     if (pmm_frame_pin_count(s->data_frame) != 1) {
         irq_restore(flags);
         return -1;
     }
 
+    /*
+     * Retirar la referencia de la pagina privada.
+     */
     if (pmm_unpin_frame(s->data_frame) != 0) {
         irq_restore(flags);
         return -1;
     }
 
+    /*
+     * Liberar los tres marcos fisicos:
+     * pagina privada, tabla y directorio.
+     */
     int a = pmm_free_frame(s->data_frame);
     int b = pmm_free_frame(s->table_frame);
     int c = pmm_free_frame(s->directory_frame);
 
     if (a != 0 || b != 0 || c != 0) {
         /*
-         * No eliminar el descriptor si
-         * falla la liberacion.
+         * Conservar el descriptor si ocurre
+         * un error durante la liberacion.
          */
         irq_restore(flags);
         return -1;
     }
 
+    /* Limpiar completamente el descriptor */
     s->used = 0;
     s->directory_frame = 0;
     s->table_frame = 0;
     s->data_frame = 0;
+    s->users = 0;
 
     irq_restore(flags);
     return 0;
 }
+
 
 int as_get(
     uint32_t id,
@@ -264,4 +293,64 @@ uint32_t as_count(void) {
 
     irq_restore(flags);
     return count;
+}
+
+/* Registrar un usuario del espacio */
+int as_acquire(uint32_t id) {
+    uint32_t flags = irq_save();
+
+    if (id == 0 || id > MIOS_AS_MAX) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    AddressSpace *s = &spaces[id - 1];
+
+    if (!s->used || s->users == UINT32_MAX) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    s->users++;
+
+    irq_restore(flags);
+    return 0;
+}
+
+/* Retirar un usuario del espacio */
+int as_release(uint32_t id) {
+    uint32_t flags = irq_save();
+
+    if (id == 0 || id > MIOS_AS_MAX) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    AddressSpace *s = &spaces[id - 1];
+
+    if (!s->used || s->users == 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    s->users--;
+
+    irq_restore(flags);
+    return 0;
+}
+
+/* Consultar el numero de usuarios */
+int as_users(uint32_t id) {
+    uint32_t flags = irq_save();
+
+    if (id == 0 || id > MIOS_AS_MAX ||
+        !spaces[id - 1].used) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    int result = (int)spaces[id - 1].users;
+
+    irq_restore(flags);
+    return result;
 }

@@ -25,5 +25,10 @@ int as_get(
 
 /* Cantidad de espacios existentes */
 uint32_t as_count(void);
+/* Registrar y retirar usuarios de un espacio */
+int as_acquire(uint32_t id);
+int as_release(uint32_t id);
 
+/* Consultar cuantos usuarios tiene */
+int as_users(uint32_t id);
 #endif

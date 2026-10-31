@@ -435,6 +435,7 @@ else if (iguales(linea, "help")) {
     imprimir("spacetest\n");
     imprimir("cr3test\n");
     imprimir("ascreate, aslist, asdestroy ID\n");
+    imprimir("asbusytest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1843,6 +1844,70 @@ else if (iguales(linea, "asdestroy")) {
         }
     }
 }
+
+else if (iguales(linea, "asbusytest")) {
+    imprimir("=== PRUEBA PROTECCION AS ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("Primero ejecuta pagingon.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+        int id = as_create();
+
+        if (id < 0) {
+            imprimir("ERROR: crear espacio.\n");
+        } else {
+            int ok = 1;
+            int acquired = 0;
+
+            if (as_acquire((uint32_t)id) != 0) {
+                imprimir("ERROR: registrar usuario.\n");
+                ok = 0;
+            } else {
+                acquired = 1;
+
+                if (as_users((uint32_t)id) == 1)
+                    imprimir("Usuario registrado: OK\n");
+                else
+                    ok = 0;
+
+                if (as_destroy((uint32_t)id) == -2)
+                    imprimir("Destruccion prematura: BLOQUEADA\n");
+                else {
+                    imprimir("ERROR: proteccion de espacio.\n");
+                    ok = 0;
+                }
+            }
+
+            if (acquired) {
+                if (as_release((uint32_t)id) != 0) {
+                    imprimir("ERROR: liberar usuario.\n");
+                    ok = 0;
+                } else {
+                    acquired = 0;
+                }
+            }
+
+            if (!acquired) {
+                if (as_destroy((uint32_t)id) == 0)
+                    imprimir("Destruccion posterior: OK\n");
+                else {
+                    imprimir("ERROR: destruir espacio.\n");
+                    ok = 0;
+                }
+            }
+
+            if (pmm_free_frames() != before)
+                ok = 0;
+
+            if (ok)
+                imprimir("AS BUSY TEST: OK\n");
+            else
+                imprimir("AS BUSY TEST: ERROR\n");
+        }
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
