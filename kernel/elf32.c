@@ -108,3 +108,152 @@ int elf32_validate(
 
     return 0;
 }
+
+/*
+ * Validacion de segmentos ELF32 PT_LOAD.
+ *
+ * Version inicial para una unica pagina
+ * de codigo/datos USER de MiOS.
+ */
+int elf32_validate_segments(
+    const void *image,
+    uint32_t size,
+    Elf32_LoadInfo *result
+) {
+    if (image == NULL || result == NULL)
+        return -1;
+
+    Elf32_Ehdr header;
+
+    /* Primero validar la cabecera */
+    if (elf32_validate(
+            image, size, &header
+        ) != 0)
+        return -1;
+
+    const uint8_t *bytes =
+        (const uint8_t *)image;
+
+    Elf32_LoadInfo info = {0};
+    info.entry = header.e_entry;
+
+    int entry_found = 0;
+
+    for (uint32_t i = 0; i < header.e_phnum; i++) {
+        Elf32_Phdr segment;
+
+        uint32_t offset =
+            header.e_phoff +
+            i * sizeof(Elf32_Phdr);
+
+        elf_copy(
+            &segment,
+            bytes + offset,
+            sizeof(segment)
+        );
+
+        if (segment.p_type != PT_LOAD)
+            continue;
+
+        /* Rechazar segmentos vacios */
+        if (segment.p_memsz == 0U)
+            return -1;
+
+        /* Los bytes del archivo caben en memoria */
+        if (segment.p_filesz > segment.p_memsz)
+            return -1;
+
+        /* Comprobar limites del archivo */
+        if (segment.p_offset > size ||
+            segment.p_filesz >
+                size - segment.p_offset)
+            return -1;
+
+        /* Limitar direcciones virtuales */
+        if (segment.p_vaddr < MIOS_ELF_USER_BASE ||
+            segment.p_vaddr >= MIOS_ELF_USER_LIMIT)
+            return -1;
+
+        if (segment.p_memsz >
+            MIOS_ELF_USER_LIMIT - segment.p_vaddr)
+            return -1;
+
+        /* Validar permisos conocidos */
+        if ((segment.p_flags & ~0x7U) != 0U)
+            return -1;
+
+        /*
+         * Validar alineacion ELF.
+         * 0 y 1 significan sin restriccion.
+         */
+        if (segment.p_align > 1U) {
+            uint32_t align = segment.p_align;
+
+            /* Debe ser potencia de dos */
+            if ((align & (align - 1U)) != 0U)
+                return -1;
+
+            if ((segment.p_vaddr & (align - 1U)) !=
+                (segment.p_offset & (align - 1U)))
+                return -1;
+        }
+
+        /* Rechazar segmentos superpuestos */
+        for (uint32_t j = 0; j < i; j++) {
+            Elf32_Phdr other;
+
+            uint32_t other_offset =
+                header.e_phoff +
+                j * sizeof(Elf32_Phdr);
+
+            elf_copy(
+                &other,
+                bytes + other_offset,
+                sizeof(other)
+            );
+
+            if (other.p_type != PT_LOAD)
+                continue;
+
+            uint32_t a0 = segment.p_vaddr;
+            uint32_t a1 = a0 + segment.p_memsz;
+
+            uint32_t b0 = other.p_vaddr;
+            uint32_t b1 = b0 + other.p_memsz;
+
+            if (a0 < b1 && b0 < a1)
+                return -1;
+        }
+
+        /*
+         * La entrada debe estar respaldada
+         * por bytes ejecutables del archivo.
+         */
+        if ((segment.p_flags & ELF_PF_X) != 0U &&
+            segment.p_filesz > 0U &&
+            header.e_entry >= segment.p_vaddr &&
+            header.e_entry - segment.p_vaddr <
+                segment.p_filesz) {
+            entry_found = 1;
+        }
+
+        /* Evitar desbordamiento de contadores */
+        if (UINT32_MAX - info.loaded_bytes <
+                segment.p_filesz ||
+            UINT32_MAX - info.memory_bytes <
+                segment.p_memsz) {
+            return -1;
+        }
+
+        info.loaded_bytes += segment.p_filesz;
+        info.memory_bytes += segment.p_memsz;
+        info.load_segments++;
+    }
+
+    if (info.load_segments == 0U ||
+        !entry_found)
+        return -1;
+
+    *result = info;
+    return 0;
+}

@@ -74,4 +74,34 @@ int elf32_validate(
     Elf32_Ehdr *result
 );
 
+/* Permisos declarados por los segmentos ELF */
+#define ELF_PF_X 0x1U
+#define ELF_PF_W 0x2U
+#define ELF_PF_R 0x4U
+
+/*
+ * Region admitida por el prototipo
+ * actual de memoria USER de MiOS.
+ */
+#define MIOS_ELF_USER_BASE  0x10800000U
+#define MIOS_ELF_USER_LIMIT 0x10801000U
+
+typedef struct {
+    uint32_t load_segments;
+    uint32_t entry;
+    uint32_t loaded_bytes;
+    uint32_t memory_bytes;
+} Elf32_LoadInfo;
+
+/*
+ * Validar los segmentos cargables.
+ *
+ * No copia ni ejecuta el ELF.
+ */
+int elf32_validate_segments(
+    const void *image,
+    uint32_t size,
+    Elf32_LoadInfo *result
+);
+
 #endif

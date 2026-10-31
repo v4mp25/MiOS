@@ -637,6 +637,115 @@ static int elf32_selftest(void) {
     return 0;
 }
 
+/*
+ * Prueba de segmentos ELF32.
+ * No ejecuta codigo de usuario.
+ */
+static int elf32_segment_selftest(void) {
+    uint8_t image[128];
+
+    for (uint32_t i = 0; i < sizeof(image); i++)
+        image[i] = 0;
+
+    Elf32_Ehdr header = {0};
+    Elf32_Phdr segment = {0};
+
+    header.e_ident[0] = ELF32_MAGIC0;
+    header.e_ident[1] = ELF32_MAGIC1;
+    header.e_ident[2] = ELF32_MAGIC2;
+    header.e_ident[3] = ELF32_MAGIC3;
+    header.e_ident[4] = ELFCLASS32;
+    header.e_ident[5] = ELFDATA2LSB;
+    header.e_ident[6] = EV_CURRENT;
+
+    header.e_type = ET_EXEC;
+    header.e_machine = EM_386;
+    header.e_version = EV_CURRENT;
+    header.e_entry = MIOS_ELF_USER_BASE;
+    header.e_ehsize = sizeof(Elf32_Ehdr);
+    header.e_phoff = sizeof(Elf32_Ehdr);
+    header.e_phentsize = sizeof(Elf32_Phdr);
+    header.e_phnum = 1;
+
+    segment.p_type = PT_LOAD;
+    segment.p_offset = 84U;
+    segment.p_vaddr = MIOS_ELF_USER_BASE;
+    segment.p_filesz = 4U;
+    segment.p_memsz = 8U;
+    segment.p_flags = ELF_PF_R | ELF_PF_X;
+    segment.p_align = 1U;
+
+    /*
+     * Copiar cabecera y encabezado de
+     * programa a la imagen.
+     */
+    const uint8_t *h =
+        (const uint8_t *)&header;
+
+    for (uint32_t i = 0; i < sizeof(header); i++)
+        image[i] = h[i];
+
+    const uint8_t *p =
+        (const uint8_t *)&segment;
+
+    for (uint32_t i = 0; i < sizeof(segment); i++)
+        image[52U + i] = p[i];
+
+    /* Cuatro bytes de instrucciones de prueba */
+    image[84] = 0x90;
+    image[85] = 0x90;
+    image[86] = 0x90;
+    image[87] = 0xC3;
+
+    Elf32_LoadInfo info;
+
+    /* Caso valido */
+    if (elf32_validate_segments(
+            image, sizeof(image), &info
+        ) != 0)
+        return -1;
+
+    if (info.load_segments != 1U ||
+        info.loaded_bytes != 4U ||
+        info.memory_bytes != 8U ||
+        info.entry != MIOS_ELF_USER_BASE)
+        return -1;
+
+    /* Error: archivos mas cortos que el segmento */
+    if (elf32_validate_segments(
+            image, 86U, &info
+        ) == 0)
+        return -1;
+
+    /*
+     * Error: p_filesz mayor que p_memsz.
+     * p_filesz comienza en offset 16
+     * del encabezado de programa.
+     */
+    image[52U + 16U] = 9U;
+
+    if (elf32_validate_segments(
+            image, sizeof(image), &info
+        ) == 0)
+        return -1;
+
+    image[52U + 16U] = 4U;
+
+    /* Error: punto de entrada fuera del codigo */
+    image[24] = 0x00;
+    image[25] = 0x10;
+    image[26] = 0x80;
+    image[27] = 0x10;
+
+    if (elf32_validate_segments(
+            image, sizeof(image), &info
+        ) == 0)
+        return -1;
+
+    return 0;
+}
+
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -708,6 +817,7 @@ else if (iguales(linea, "help")) {
     imprimir("userpsdemo\n");
     imprimir("userpidtest\n");
     imprimir("elftest\n");
+    imprimir("elfsegmenttest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -3643,6 +3753,21 @@ else if (iguales(linea, "elftest")) {
 
     } else {
         imprimir("ELF TEST: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "elfsegmenttest")) {
+    imprimir("=== SEGMENTOS ELF32 ===\n");
+
+    if (elf32_segment_selftest() == 0) {
+        imprimir("Segmento PT_LOAD: OK\n");
+        imprimir("Limites de archivo: OK\n");
+        imprimir("Memoria solicitada: OK\n");
+        imprimir("Direccion de entrada: OK\n");
+        imprimir("Archivos invalidos rechazados: OK\n");
+        imprimir("ELF SEGMENT TEST: OK\n");
+    } else {
+        imprimir("ELF SEGMENT TEST: ERROR\n");
     }
 }
 
