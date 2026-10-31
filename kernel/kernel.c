@@ -16,6 +16,7 @@
 #include "user_program.h"
 #include "ring3.h"
 #include "user_context.h"
+#include "user_tasks.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -586,6 +587,7 @@ else if (iguales(linea, "help")) {
     imprimir("syscall2test\n");
     imprimir("ring3test\n");
     imprimir("ring3verify\n");
+    imprimir("usertasktest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2601,6 +2603,54 @@ else if (iguales(linea, "ring3verify")) {
         imprimir("RING 3 VERIFY: OK\n");
     } else {
         imprimir("Falta ejecutar ring3test.\n");
+    }
+}
+
+else if (iguales(linea, "usertasktest")) {
+    imprimir("=== DOS TAREAS RING 3 ===\n");
+
+    if (!paging_cpu_enabled()) {
+        imprimir("ERROR: ejecuta pagingon.\n");
+    } else if (as_count() != 0U) {
+        imprimir("ERROR: hay espacios activos.\n");
+    } else {
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+
+        if (user_tasks_prepare() != 0) {
+            imprimir("ERROR: preparando tareas.\n");
+            ok = 0;
+        } else {
+            if (user_tasks_verify() != 0) {
+                imprimir("ERROR: verificando tareas.\n");
+                ok = 0;
+            } else {
+                imprimir("Tarea 1 preparada: OK\n");
+                imprimir("Tarea 2 preparada: OK\n");
+                imprimir("CR3 independientes: OK\n");
+                imprimir("Pilas USER independientes: OK\n");
+                imprimir("Pilas kernel independientes: OK\n");
+                imprimir("Programas cargados: OK\n");
+            }
+        }
+
+        if (user_tasks_cleanup() != 0) {
+            imprimir("ERROR: liberando tareas.\n");
+            ok = 0;
+        }
+
+        if (as_count() != 0U ||
+            pmm_free_frames() != before) {
+            imprimir("ERROR: memoria no recuperada.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("USER TASK TEST: OK\n");
+        } else {
+            imprimir("USER TASK TEST: ERROR\n");
+        }
     }
 }
 
