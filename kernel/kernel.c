@@ -19,6 +19,7 @@
 #include "user_tasks.h"
 #include "user_scheduler.h"
 #include "user_process.h"
+#include "elf32.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -527,6 +528,115 @@ static void tss_test_task2(void) {
 static uint8_t ring3_test_kernel_stack[16384]
     __attribute__((aligned(16)));
 
+/*
+ * Construye una imagen ELF de prueba.
+ * No contiene codigo ejecutable real.
+ */
+static int elf32_selftest(void) {
+    uint8_t image[
+        ELF32_EHDR_SIZE + ELF32_PHDR_SIZE
+    ];
+
+    for (uint32_t i = 0;
+         i < sizeof(image);
+         i++) {
+        image[i] = 0;
+    }
+
+    Elf32_Ehdr header = {0};
+
+    header.e_ident[0] = ELF32_MAGIC0;
+    header.e_ident[1] = ELF32_MAGIC1;
+    header.e_ident[2] = ELF32_MAGIC2;
+    header.e_ident[3] = ELF32_MAGIC3;
+
+    header.e_ident[4] = ELFCLASS32;
+    header.e_ident[5] = ELFDATA2LSB;
+    header.e_ident[6] = EV_CURRENT;
+
+    header.e_type = ET_EXEC;
+    header.e_machine = EM_386;
+    header.e_version = EV_CURRENT;
+
+    header.e_entry = 0x10800000U;
+
+    header.e_ehsize = sizeof(Elf32_Ehdr);
+    header.e_phoff = sizeof(Elf32_Ehdr);
+
+    header.e_phentsize = sizeof(Elf32_Phdr);
+    header.e_phnum = 1;
+
+    /* Copiar cabecera al inicio del archivo */
+    const uint8_t *src = (const uint8_t *)&header;
+
+    for (uint32_t i = 0;
+         i < sizeof(header);
+         i++) {
+        image[i] = src[i];
+    }
+
+    Elf32_Ehdr parsed;
+
+    /* Caso valido estructuralmente */
+    if (elf32_validate(
+            image,
+            sizeof(image),
+            &parsed
+        ) != 0) {
+        return -1;
+    }
+
+    if (parsed.e_entry != 0x10800000U ||
+        parsed.e_machine != EM_386 ||
+        parsed.e_phnum != 1U) {
+        return -1;
+    }
+
+    /* Rechazar un archivo demasiado corto */
+    if (elf32_validate(
+            image,
+            ELF32_EHDR_SIZE - 1U,
+            &parsed
+        ) == 0) {
+        return -1;
+    }
+
+    /* Rechazar tabla de programas incompleta */
+    if (elf32_validate(
+            image,
+            ELF32_EHDR_SIZE,
+            &parsed
+        ) == 0) {
+        return -1;
+    }
+
+    /* Rechazar identificacion ELF incorrecta */
+    image[0] = 0;
+
+    if (elf32_validate(
+            image,
+            sizeof(image),
+            &parsed
+        ) == 0) {
+        return -1;
+    }
+
+    image[0] = ELF32_MAGIC0;
+
+    /* Rechazar arquitectura incorrecta */
+    image[18] = 0;
+
+    if (elf32_validate(
+            image,
+            sizeof(image),
+            &parsed
+        ) == 0) {
+        return -1;
+    }
+
+    return 0;
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -597,6 +707,7 @@ else if (iguales(linea, "help")) {
     imprimir("userproctest\n");
     imprimir("userpsdemo\n");
     imprimir("userpidtest\n");
+    imprimir("elftest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -3512,6 +3623,29 @@ if (syscall_audit_get(0, &audit0) != 0 ||
         }
     }
 }
+
+else if (iguales(linea, "elftest")) {
+    imprimir("=== VALIDADOR ELF32 MIOS ===\n");
+
+    if (sizeof(Elf32_Ehdr) != 52U ||
+        sizeof(Elf32_Phdr) != 32U) {
+
+        imprimir("ERROR: estructuras ELF32.\n");
+
+    } else if (elf32_selftest() == 0) {
+
+        imprimir("Cabecera ELF32: OK\n");
+        imprimir("Arquitectura Intel x86: OK\n");
+        imprimir("Direccion de entrada: OK\n");
+        imprimir("Tamano de cabeceras: OK\n");
+        imprimir("Archivos invalidos rechazados: OK\n");
+        imprimir("ELF TEST: OK\n");
+
+    } else {
+        imprimir("ELF TEST: ERROR\n");
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
