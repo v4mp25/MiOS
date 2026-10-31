@@ -24,6 +24,7 @@ static void process_clear(uint32_t i) {
     processes[i].address_space_id = 0;
     processes[i].cr3 = 0;
     processes[i].used = 0;
+    processes[i].state = USER_PROCESS_FREE;
 }
 
 uint32_t user_process_count(void) {
@@ -88,6 +89,7 @@ int user_process_prepare(void) {
         processes[i].address_space_id =
             task->address_space_id;
         processes[i].cr3 = task->cr3;
+        processes[i].state = USER_PROCESS_READY;
         processes[i].used = 1;
     }
 
@@ -134,13 +136,16 @@ int user_process_verify(void) {
         const UserTask *task =
             user_task_get(i);
 
-        if (!process->used ||
-            process->pid == 0 ||
-            process->task_index != i ||
-            task == NULL ||
-            task->state != USER_TASK_READY) {
-            return -1;
-        }
+        
+if (!process->used ||
+    process->pid == 0 ||
+    process->task_index != i ||
+    process->state != USER_PROCESS_READY ||
+    task == NULL ||
+    task->state != USER_TASK_READY) {
+    return -1;
+}
+
 
         if (process->cr3 != task->cr3 ||
             process->address_space_id !=
@@ -194,4 +199,105 @@ int user_process_cleanup(void) {
 
     irq_restore(flags);
     return 0;
+}
+
+/*
+ * Sincronizar el estado de cada proceso
+ * con el estado de su tarea asociada.
+ *
+ * En esta etapa solo gestionamos
+ * READY y DONE.
+ */
+int user_process_sync_states(void) {
+    uint32_t flags = irq_save();
+
+    for (uint32_t i = 0;
+         i < MIOS_USER_TASK_COUNT;
+         i++) {
+
+        if (!processes[i].used)
+            continue;
+
+        const UserTask *task =
+            user_task_get(processes[i].task_index);
+
+        if (task == NULL) {
+            irq_restore(flags);
+            return -1;
+        }
+
+        if (task->state == USER_TASK_READY) {
+            processes[i].state =
+                USER_PROCESS_READY;
+
+        } else if (task->state == USER_TASK_DONE) {
+            processes[i].state =
+                USER_PROCESS_DONE;
+
+        } else {
+            irq_restore(flags);
+            return -1;
+        }
+    }
+
+    irq_restore(flags);
+    return 0;
+}
+
+/*
+ * Consultar una posicion de la tabla
+ * sin entregar un puntero modificable.
+ */
+int user_process_get_at(
+    uint32_t index,
+    UserProcess *result
+) {
+    if (index >= MIOS_USER_TASK_COUNT ||
+        result == NULL) {
+        return -1;
+    }
+
+    uint32_t flags = irq_save();
+
+    if (!processes[index].used) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    *result = processes[index];
+
+    irq_restore(flags);
+    return 0;
+}
+
+/*
+ * Obtener el PID de la tarea indicada.
+ */
+int user_process_pid_by_task(
+    uint32_t task_index,
+    uint32_t *pid
+) {
+    if (task_index >= MIOS_USER_TASK_COUNT ||
+        pid == NULL) {
+        return -1;
+    }
+
+    uint32_t flags = irq_save();
+
+    for (uint32_t i = 0;
+         i < MIOS_USER_TASK_COUNT;
+         i++) {
+
+        if (processes[i].used &&
+            processes[i].task_index == task_index) {
+
+            *pid = processes[i].pid;
+
+            irq_restore(flags);
+            return 0;
+        }
+    }
+
+    irq_restore(flags);
+    return -1;
 }

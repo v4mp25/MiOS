@@ -595,6 +595,7 @@ else if (iguales(linea, "help")) {
     imprimir("userframecheck\n");
     imprimir("usermultitest\n");
     imprimir("userproctest\n");
+    imprimir("userpsdemo\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -3116,6 +3117,129 @@ else if (iguales(linea, "userproctest")) {
             imprimir("USER PROC TEST: OK\n");
         } else {
             imprimir("USER PROC TEST: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "userpsdemo")) {
+    imprimir("=== TABLA PROCESOS USER ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0U ||
+        user_process_count() != 0U) {
+
+        imprimir("Activa pagingon y libera espacios.\n");
+
+    } else {
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+        int prepared = 0;
+
+        if (user_process_prepare() != 0) {
+            imprimir("ERROR: creando procesos.\n");
+            ok = 0;
+        } else {
+            prepared = 1;
+
+            if (user_process_verify() != 0 ||
+                user_process_sync_states() != 0) {
+                ok = 0;
+            }
+
+            if (ok) {
+                for (uint32_t i = 0;
+                     i < MIOS_USER_TASK_COUNT;
+                     i++) {
+
+                    UserProcess p;
+
+                    if (user_process_get_at(i, &p) != 0 ||
+                        p.state != USER_PROCESS_READY) {
+                        ok = 0;
+                        break;
+                    }
+
+                    imprimir("PID: ");
+                    imprimir_hex32(p.pid);
+
+                    imprimir(" | CR3: ");
+                    imprimir_hex32(p.cr3);
+
+                    imprimir(" | READY\n");
+                }
+            }
+
+            /*
+             * Simular la finalizacion de
+             * la primera tarea.
+             */
+            if (ok &&
+                user_task_mark_done(0) != 0) {
+                ok = 0;
+            }
+
+            if (ok &&
+                user_process_sync_states() != 0) {
+                ok = 0;
+            }
+
+            if (ok) {
+                UserProcess p0;
+                UserProcess p1;
+
+                uint32_t pid0 = 0;
+                uint32_t pid1 = 0;
+
+                if (user_process_get_at(0, &p0) != 0 ||
+                    user_process_get_at(1, &p1) != 0 ||
+                    user_process_pid_by_task(
+                        0, &pid0
+                    ) != 0 ||
+                    user_process_pid_by_task(
+                        1, &pid1
+                    ) != 0 ||
+                    p0.state != USER_PROCESS_DONE ||
+                    p1.state != USER_PROCESS_READY ||
+                    p0.pid != pid0 ||
+                    p1.pid != pid1 ||
+                    pid0 == pid1) {
+
+                    ok = 0;
+                } else {
+                    imprimir("Proceso 0 -> DONE: OK\n");
+                    imprimir("Proceso 1 -> READY: OK\n");
+                    imprimir("Asociacion PID-tarea: OK\n");
+                }
+            }
+        }
+
+        /*
+         * Liberar los recursos creados.
+         * La limpieza tambien acepta tareas
+         * marcadas como DONE.
+         */
+        if (prepared ||
+            user_process_count() != 0U ||
+            as_count() != 0U) {
+
+            if (user_process_cleanup() != 0) {
+                imprimir("ERROR: limpieza.\n");
+                ok = 0;
+            }
+        }
+
+        if (user_process_count() != 0U ||
+            as_count() != 0U ||
+            pmm_free_frames() != before) {
+            imprimir("ERROR: recursos pendientes.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("USER PS DEMO: OK\n");
+        } else {
+            imprimir("USER PS DEMO: ERROR\n");
         }
     }
 }
