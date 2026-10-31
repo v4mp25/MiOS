@@ -14,11 +14,32 @@
  * NO se ejecuta todavia.
  */
 
+
+/*
+ * Primer programa de usuario MiOS.
+ *
+ * mov eax, 1       ; SYS_TEST
+ * int 0x80         ; Solicitar servicio
+ *
+ * mov eax, 2       ; SYS_EXIT
+ * int 0x80         ; Solicitar finalizacion
+ *
+ * ud2              ; Error si SYS_EXIT retorna
+ */
+
 static const uint8_t program_code[] = {
+    /* SYS_TEST */
     0xB8, 0x01, 0x00, 0x00, 0x00,
     0xCD, 0x80,
-    0xEB, 0xFE
+
+    /* SYS_EXIT */
+    0xB8, 0x02, 0x00, 0x00, 0x00,
+    0xCD, 0x80,
+
+    /* No debe ejecutarse */
+    0x0F, 0x0B
 };
+
 
 int user_program_prepare(uint32_t physical_frame) {
     if (!pmm_frame_allocated(physical_frame))
