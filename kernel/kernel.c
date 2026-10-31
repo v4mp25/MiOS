@@ -9,6 +9,7 @@
 #include "pmm.h"
 #include "paging.h"
 #include "irq.h"
+#include "address_space.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -433,6 +434,7 @@ else if (iguales(linea, "help")) {
     imprimir("vmmconcurrent\n");
     imprimir("spacetest\n");
     imprimir("cr3test\n");
+    imprimir("ascreate, aslist, asdestroy ID\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1779,7 +1781,66 @@ else if (iguales(linea, "cr3test")) {
         }
     }
 }
+else if (iguales(linea, "ascreate")) {
+    int id = as_create();
 
+    if (id < 0) {
+        imprimir("ERROR: no se pudo crear espacio.\n");
+    } else {
+        imprimir("Espacio creado: ");
+        imprimir_numero((uint32_t)id);
+        imprimir("\n");
+    }
+}
+else if (iguales(linea, "aslist")) {
+    imprimir("=== ESPACIOS DE DIRECCIONES ===\n");
+    imprimir("ID   CR3          MARCO PRIVADO\n");
+
+    for (uint32_t id = 1; id <= MIOS_AS_MAX; id++) {
+        uint32_t cr3 = 0;
+        uint32_t frame = 0;
+
+        if (as_get(id, &cr3, &frame) != 0)
+            continue;
+
+        imprimir_numero(id);
+        imprimir("    ");
+
+        imprimir_hex32(cr3);
+        imprimir("   ");
+
+        imprimir_hex32(frame);
+        imprimir("\n");
+    }
+
+    imprimir("Total: ");
+    imprimir_numero(as_count());
+    imprimir("\n");
+}
+else if (iguales(linea, "asdestroy")) {
+    uint32_t id = 0;
+
+    if (iguales(args, "1"))
+        id = 1;
+    else if (iguales(args, "2"))
+        id = 2;
+
+    if (id == 0) {
+        imprimir("Uso: asdestroy 1|2\n");
+    } else {
+        int result = as_destroy(id);
+
+        if (result == 0) {
+            imprimir("Espacio destruido: ");
+            imprimir_numero(id);
+            imprimir("\n");
+        } else if (result == -2) {
+            imprimir("ERROR: espacio activo.\n");
+        } else {
+            imprimir("ERROR: no se pudo destruir.\n");
+        }
+    }
+}
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -1883,6 +1944,7 @@ void kernel_main(uint32_t multiboot_magic,
             int pmm_status = pmm_init();
 (void)pmm_status;
 paging_init();
+as_init();
     mios_fs_init();
     memory_init();
     thread_init();
