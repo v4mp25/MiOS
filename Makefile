@@ -51,8 +51,8 @@ tss.o: kernel/tss.c include/tss.h include/gdt.h
 	$(CC) $(CFLAGS) -c kernel/tss.c -o tss.o
 
 
-kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o elf_loader.o elf32.o user_process.o user_scheduler.o memory_map.o user_tasks.o ring3.o user_program.o thread.o syscall.o tss.o user_context.o address_space.o pmm.o thread_switch.o gdt.o gdt_flush.o paging.o process.o kernel/linker.ld
-	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o kernel.o user_process.o elf_loader.o elf32.o user_scheduler.o user_tasks.o fs.o ring3.o ata.o user_program.o interrupts.o interrupts_c.o syscall.o tss.o memory.o user_context.o gdt.o gdt_flush.o paging.o memory_map.o address_space.o pmm.o thread.o thread_switch.o process.o
+kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o elf_loader.o elf32.o user_process.o user_scheduler.o memory_map.o user_tasks.o ring3.o user_program.o thread.o syscall.o tss.o user_context.o address_space.o pmm.o thread_switch.o gdt.o hola_elf.o gdt_flush.o paging.o process.o kernel/linker.ld
+	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o kernel.o user_process.o elf_loader.o elf32.o user_scheduler.o user_tasks.o fs.o ring3.o ata.o user_program.o interrupts.o interrupts_c.o syscall.o tss.o memory.o user_context.o gdt.o gdt_flush.o paging.o hola_elf.o memory_map.o address_space.o pmm.o thread.o thread_switch.o process.o
 
 os.iso: kernel.bin boot/grub/grub.cfg
 	mkdir -p iso/boot/grub
@@ -69,7 +69,7 @@ run: os.iso
 		-boot order=d \
 		-m 128M
 clean:
-	rm -f boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o user_process.o elf32.o elf_loader.o user_scheduler.o user_context.o user_tasks.o memory.o ring3.o user_program.o gdt.o syscall.o tss.o gdt_flush.o paging.o thread.o address_space.o thread_switch.o process.o kernel.bin os.iso memory_map.o
+	rm -f boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o user_process.o elf32.o elf_loader.o user_scheduler.o user_context.o user_tasks.o memory.o ring3.o user_program.o gdt.o syscall.o tss.o gdt_flush.o paging.o thread.o address_space.o thread_switch.o process.o kernel.bin os.iso memory_map.o user/hola.o user/hola.elf hola_elf.o
 	rm -rf iso/boot
 interrupts.o: boot/interrupts.asm
 	$(ASM) -f elf32 boot/interrupts.asm -o interrupts.o
@@ -82,6 +82,16 @@ paging.o: kernel/paging.c include/paging.h include/pmm.h include/irq.h
 
 gdt.o: kernel/gdt.c include/gdt.h include/tss.h
 	$(CC) $(CFLAGS) -c kernel/gdt.c -o gdt.o
+
+user/hola.o: user/hola.asm
+	nasm -f elf32 user/hola.asm -o user/hola.o
+
+user/hola.elf: user/hola.o user/user.ld
+	$(LD) -m elf_i386 -T user/user.ld -o user/hola.elf user/hola.o
+
+hola_elf.o: user/hola.elf
+	objcopy -I binary -O elf32-i386 -B i386 user/hola.elf hola_elf.o
+
 
 gdt_flush.o: boot/gdt_flush.asm
 	$(ASM) -f elf32 boot/gdt_flush.asm -o gdt_flush.o

@@ -879,7 +879,12 @@ static int elf32_load_selftest(void) {
 
     return ok ? 0 : -1;
 }
+/* Bytes del archivo user/hola.elf enlazado */
+extern const uint8_t _binary_user_hola_elf_start[];
+extern const uint8_t _binary_user_hola_elf_end[];
 
+static uint8_t elf_test_kernel_stack[16384]
+    __attribute__((aligned(16)));
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -953,6 +958,7 @@ else if (iguales(linea, "help")) {
     imprimir("elftest\n");
     imprimir("elfsegmenttest\n");
     imprimir("elfloadtest\n");
+    imprimir("elfruntest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -3942,6 +3948,184 @@ else if (iguales(linea, "elfloadtest")) {
         }
     }
 }
+
+else if (iguales(linea, "elfruntest")) {
+    imprimir("=== EJECUTANDO ELF32 REAL ===\n");
+
+    if (!paging_cpu_enabled() || as_count() != 0U) {
+        imprimir("Activa pagingon y libera espacios.\n");
+    } else {
+        const uint8_t *image =
+            _binary_user_hola_elf_start;
+
+        uint32_t image_size =
+            (uint32_t)(
+                _binary_user_hola_elf_end -
+                _binary_user_hola_elf_start
+            );
+
+        uint32_t before = pmm_free_frames();
+        int ok = 1;
+        int id = -1;
+
+        Elf32_LoadInfo info;
+        uint32_t entry = 0;
+        uint32_t user_cr3 = 0;
+        uint32_t code_frame = 0;
+        uint32_t stack_frame = 0;
+
+        /* Validar el ELF real */
+        if (elf32_validate_segments(
+                image, image_size, &info
+            ) != 0) {
+            imprimir("ERROR: ELF invalido.\n");
+            ok = 0;
+        }
+
+        /*
+         * El lanzador actual ring3_enter
+         * comienza en 0x10800000.
+         */
+        if (ok &&
+            info.entry != MIOS_ELF_USER_BASE) {
+            imprimir("ERROR: entrada ELF incompatible.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            id = as_create();
+
+            if (id < 0) {
+                imprimir("ERROR: crear espacio.\n");
+                ok = 0;
+            }
+        }
+
+        if (ok &&
+            (as_get(
+                (uint32_t)id,
+                &user_cr3,
+                &code_frame
+            ) != 0 ||
+             as_get_user_stack(
+                (uint32_t)id,
+                &stack_frame
+            ) != 0)) {
+
+            imprimir("ERROR: memoria de usuario.\n");
+            ok = 0;
+        }
+
+        if (ok &&
+            elf32_load(
+                image,
+                image_size,
+                (uint32_t)id,
+                &entry
+            ) != 0) {
+
+            imprimir("ERROR: cargando ELF.\n");
+            ok = 0;
+        }
+
+        if (ok && entry != MIOS_ELF_USER_BASE) {
+            imprimir("ERROR: punto de entrada.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Archivo ELF32 validado: OK\n");
+            imprimir("Segmentos cargados: OK\n");
+
+            uint32_t tests_before =
+                syscall_test_count();
+
+            uint32_t exits_before =
+                syscall_exit_count();
+
+            uint32_t old_esp0 =
+                tss_get_kernel_stack();
+
+            uint32_t flags = irq_save();
+
+            uint32_t kernel_top =
+                (uint32_t)(uintptr_t)(
+                    elf_test_kernel_stack +
+                    sizeof(elf_test_kernel_stack)
+                );
+
+            tss_set_kernel_stack(kernel_top);
+
+            /*
+             * Ejecutar el ELF cargado.
+             * SYS_EXIT devuelve a Ring 0.
+             */
+            ring3_enter(
+                user_cr3,
+                MIOS_AS_USER_STACK_TOP
+            );
+
+            /* De vuelta en el kernel */
+            tss_set_kernel_stack(old_esp0);
+            irq_restore(flags);
+
+            if (syscall_test_count() !=
+                tests_before + 1U) {
+                imprimir("ERROR: SYS_TEST del ELF.\n");
+                ok = 0;
+            }
+
+            if (syscall_exit_count() !=
+                exits_before + 1U) {
+                imprimir("ERROR: SYS_EXIT del ELF.\n");
+                ok = 0;
+            }
+
+            if (ok) {
+                imprimir("SYS_TEST desde ELF: OK\n");
+                imprimir("SYS_EXIT desde ELF: OK\n");
+            }
+        }
+
+        /* Confirmar regreso al CR3 principal */
+        uint32_t current_cr3 = 0;
+
+        __asm__ volatile (
+            "mov %%cr3, %0"
+            : "=r"(current_cr3)
+            :
+            : "memory"
+        );
+
+        current_cr3 &= 0xFFFFF000U;
+
+        if (current_cr3 !=
+            paging_directory_address()) {
+            imprimir("ERROR: CR3 no restaurado.\n");
+            ok = 0;
+        } else if (id >= 0) {
+            if (as_destroy((uint32_t)id) != 0) {
+                imprimir("ERROR: liberar espacio.\n");
+                ok = 0;
+            }
+        }
+
+        if (as_count() != 0U ||
+            pmm_free_frames() != before) {
+            imprimir("ERROR: memoria pendiente.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Retorno a la shell: OK\n");
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("ELF RUN TEST: OK\n");
+        } else {
+            imprimir("ELF RUN TEST: ERROR\n");
+        }
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
