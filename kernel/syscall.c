@@ -49,3 +49,34 @@ uint32_t syscall_exit_count(void) {
     irq_restore(flags);
     return result;
 }
+
+/*
+ * Contadores por nivel de privilegio
+ * desde donde se invoco int 0x80.
+ */
+static volatile uint32_t ring3_calls = 0;
+static volatile uint32_t ring0_calls = 0;
+
+void syscall_record_origin(uint32_t saved_cs) {
+    uint32_t cpl = saved_cs & 3U;
+
+    if (cpl == 3U) {
+        ring3_calls++;
+    } else if (cpl == 0U) {
+        ring0_calls++;
+    }
+}
+
+uint32_t syscall_ring3_count(void) {
+    uint32_t flags = irq_save();
+    uint32_t result = ring3_calls;
+    irq_restore(flags);
+    return result;
+}
+
+uint32_t syscall_ring0_count(void) {
+    uint32_t flags = irq_save();
+    uint32_t result = ring0_calls;
+    irq_restore(flags);
+    return result;
+}

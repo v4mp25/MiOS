@@ -10,7 +10,7 @@ global syscall_stub
 
 extern syscall_dispatch
 extern ring3_exit
-
+extern syscall_record_origin
 syscall_stub:
     ; Guardar segmentos originales
     push ds
@@ -28,6 +28,11 @@ syscall_stub:
     mov es, ax
     mov fs, ax
     mov gs, ax
+; El CS original esta guardado
+    ; a 52 bytes del ESP actual.
+    push dword [esp + 52]
+    call syscall_record_origin
+    add esp, 4
 
     ; EAX original: numero de syscall
     mov eax, [esp + 28]

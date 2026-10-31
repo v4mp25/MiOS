@@ -584,6 +584,7 @@ else if (iguales(linea, "help")) {
     imprimir("usercodetest\n");
     imprimir("syscall2test\n");
     imprimir("ring3test\n");
+    imprimir("ring3verify\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2534,6 +2535,45 @@ else if (iguales(linea, "ring3test")) {
                 imprimir("RING 3 TEST: ERROR\n");
             }
         }
+    }
+}
+
+else if (iguales(linea, "ring3verify")) {
+    imprimir("=== VERIFICACION CPL MIOS ===\n");
+
+    uint32_t ring0_before = syscall_ring0_count();
+    uint32_t ring3_before = syscall_ring3_count();
+
+    /* Una llamada desde la shell Ring 0 */
+    __asm__ volatile (
+        "int $0x80"
+        :
+        : "a"(MIOS_SYS_TEST)
+        : "memory", "cc"
+    );
+
+    uint32_t ring0_after = syscall_ring0_count();
+    uint32_t ring3_after = syscall_ring3_count();
+
+    if (ring0_after == ring0_before + 1U &&
+        ring3_after == ring3_before) {
+
+        imprimir("Origen Ring 0: OK\n");
+        imprimir("Clasificacion CPL: OK\n");
+    } else {
+        imprimir("RING 3 VERIFY: ERROR\n");
+        return;
+    }
+
+    /*
+     * Comprobar si ya se ejecutaron
+     * syscalls reales desde Ring 3.
+     */
+    if (ring3_after >= 2U) {
+        imprimir("Syscalls Ring 3 registradas: OK\n");
+        imprimir("RING 3 VERIFY: OK\n");
+    } else {
+        imprimir("Falta ejecutar ring3test.\n");
     }
 }
 

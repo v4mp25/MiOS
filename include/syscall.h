@@ -12,5 +12,15 @@ void syscall_dispatch(uint32_t number);
 /* Consultar cantidad de llamadas */
 uint32_t syscall_test_count(void);
 uint32_t syscall_exit_count(void);
+
+/* Registrar el nivel de privilegio de origen */
+void syscall_record_origin(uint32_t saved_cs);
+
+/* Numero de syscalls originadas en Ring 3 */
+uint32_t syscall_ring3_count(void);
+
+/* Numero de syscalls originadas en Ring 0 */
+uint32_t syscall_ring0_count(void);
+
 #endif
 
