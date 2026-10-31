@@ -888,6 +888,9 @@ static uint8_t elf_test_kernel_stack[16384]
     __attribute__((aligned(16)));
 
     static uint8_t elf_disk_buffer[MIOS_ELF_DISK_MAX];
+    /* Pila Ring 0 para ejecutar el ELF desde ATA */
+static uint8_t elf_disk_run_kernel_stack[16384]
+    __attribute__((aligned(16)));
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -963,6 +966,7 @@ else if (iguales(linea, "help")) {
     imprimir("elfloadtest\n");
     imprimir("elfruntest\n");
     imprimir("elfdisktest\n");
+    imprimir("elfdiskrun\n");   
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4199,6 +4203,196 @@ else if (iguales(linea, "elfdisktest")) {
         imprimir("ELF DISK TEST: OK\n");
     } else {
         imprimir("ELF DISK TEST: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "elfdiskrun")) {
+    imprimir("=== EJECUTAR ELF DESDE ATA ===\n");
+
+    if (!paging_cpu_enabled() || as_count() != 0U) {
+        imprimir("ERROR: ejecuta pagingon y libera espacios.\n");
+    } else {
+        int ok = 1;
+        int id = -1;
+
+        uint32_t size = 0;
+        uint32_t entry = 0;
+        uint32_t user_cr3 = 0;
+        uint32_t code_frame = 0;
+        uint32_t stack_frame = 0;
+
+        uint32_t before = pmm_free_frames();
+
+        Elf32_LoadInfo info;
+
+        /* 1. Leer el ELF completo desde ATA */
+        if (elf_disk_read(
+                elf_disk_buffer,
+                sizeof(elf_disk_buffer),
+                &size
+            ) != 0) {
+
+            imprimir("ERROR: lectura ELF desde ATA.\n");
+            ok = 0;
+        } else {
+            imprimir("Lectura ELF desde ATA: OK\n");
+        }
+
+        /* 2. Validar segmentos y punto de entrada */
+        if (ok && elf32_validate_segments(
+                elf_disk_buffer,
+                size,
+                &info
+            ) != 0) {
+
+            imprimir("ERROR: segmentos ELF.\n");
+            ok = 0;
+        } else if (ok) {
+            imprimir("Segmentos ELF32: OK\n");
+        }
+
+        /* 3. Crear memoria privada del programa */
+        if (ok) {
+            id = as_create();
+
+            if (id < 0) {
+                imprimir("ERROR: espacio USER.\n");
+                ok = 0;
+            }
+        }
+
+        /* 4. Consultar CR3 y marcos fisicos */
+        if (ok &&
+            (as_get(
+                (uint32_t)id,
+                &user_cr3,
+                &code_frame
+            ) != 0 ||
+             as_get_user_stack(
+                (uint32_t)id,
+                &stack_frame
+            ) != 0)) {
+
+            imprimir("ERROR: obtener memoria USER.\n");
+            ok = 0;
+        }
+
+        /* 5. Cargar el ELF leido desde ATA */
+        if (ok && elf32_load(
+                elf_disk_buffer,
+                size,
+                (uint32_t)id,
+                &entry
+            ) != 0) {
+
+            imprimir("ERROR: cargar ELF.\n");
+            ok = 0;
+        } else if (ok) {
+            imprimir("ELF cargado en memoria USER: OK\n");
+        }
+
+        if (ok && entry != info.entry) {
+            imprimir("ERROR: direccion de entrada.\n");
+            ok = 0;
+        }
+
+        /* 6. Ejecutar realmente en Ring 3 */
+        if (ok) {
+            uint32_t test_before =
+                syscall_test_count();
+
+            uint32_t exit_before =
+                syscall_exit_count();
+
+            uint32_t old_esp0 =
+                tss_get_kernel_stack();
+
+            uint32_t flags = irq_save();
+
+            uint32_t kernel_top =
+                (uint32_t)(uintptr_t)(
+                    elf_disk_run_kernel_stack +
+                    sizeof(elf_disk_run_kernel_stack)
+                );
+
+            tss_set_kernel_stack(kernel_top);
+
+            /*
+             * Se ejecuta el codigo obtenido
+             * directamente desde el disco.
+             */
+            ring3_enter_at(
+                user_cr3,
+                MIOS_AS_USER_STACK_TOP,
+                entry
+            );
+
+            /* El SYS_EXIT devuelve a Ring 0 */
+            tss_set_kernel_stack(old_esp0);
+            irq_restore(flags);
+
+            if (syscall_test_count() !=
+                test_before + 1U) {
+
+                imprimir("ERROR: SYS_TEST.\n");
+                ok = 0;
+            }
+
+            if (syscall_exit_count() !=
+                exit_before + 1U) {
+
+                imprimir("ERROR: SYS_EXIT.\n");
+                ok = 0;
+            }
+
+            if (ok) {
+                imprimir("SYS_TEST desde ELF ATA: OK\n");
+                imprimir("SYS_EXIT desde ELF ATA: OK\n");
+            }
+        }
+
+        /* 7. Comprobar que regresamos al kernel */
+        uint32_t current_cr3 = 0;
+
+        __asm__ volatile (
+            "mov %%cr3, %0"
+            : "=r"(current_cr3)
+            :
+            : "memory"
+        );
+
+        current_cr3 &= 0xFFFFF000U;
+
+        if (current_cr3 !=
+            paging_directory_address()) {
+
+            imprimir("ERROR: CR3 principal.\n");
+            ok = 0;
+
+            /* No destruir el espacio activo */
+
+        } else if (id >= 0) {
+
+            if (as_destroy((uint32_t)id) != 0) {
+                imprimir("ERROR: liberar espacio.\n");
+                ok = 0;
+            }
+        }
+
+        if (as_count() != 0U ||
+            pmm_free_frames() != before) {
+
+            imprimir("ERROR: memoria pendiente.\n");
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Retorno a la shell: OK\n");
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("ELF DISK RUN: OK\n");
+        } else {
+            imprimir("ELF DISK RUN: ERROR\n");
+        }
     }
 }
 
