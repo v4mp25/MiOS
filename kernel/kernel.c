@@ -10,6 +10,8 @@
 #include "paging.h"
 #include "irq.h"
 #include "address_space.h"
+#include "gdt.h"
+#include "tss.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -542,6 +544,8 @@ else if (iguales(linea, "help")) {
     imprimir("processcr3test\n");
     imprimir("procclean\n");
     imprimir("gdtinfo\n");
+    imprimir("gdtcheck\n");
+    imprimir("tsscheck\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -2080,6 +2084,31 @@ else if (iguales(linea, "procclean")) {
 else if (iguales(linea, "gdtinfo")) {
     mostrar_gdt();
 }
+else if (iguales(linea, "gdtcheck")) {
+    imprimir("=== GDT DE MIOS ===\n");
+
+    if (gdt_verify()) {
+        imprimir("Codigo kernel: OK\n");
+        imprimir("Datos kernel: OK\n");
+        imprimir("Pila kernel: OK\n");
+        imprimir("GDT CHECK: OK\n");
+    } else {
+        imprimir("GDT CHECK: ERROR\n");
+    }
+}
+else if (iguales(linea, "tsscheck")) {
+    imprimir("=== TSS DE MIOS ===\n");
+
+    if (tss_verify()) {
+        imprimir("Descriptor TSS: OK\n");
+        imprimir("Selector TR: 0x00000028\n");
+        imprimir("SS0 kernel: OK\n");
+        imprimir("ESP0 kernel: OK\n");
+        imprimir("TSS CHECK: OK\n");
+    } else {
+        imprimir("TSS CHECK: ERROR\n");
+    }
+}
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -2190,6 +2219,9 @@ as_init();
     process_init();
     color = 0x0F;
     limpiar_pantalla();
+    tss_prepare();
+    gdt_init();
+    tss_load();
  interrupts_init();
     color = 0x0A;
     imprimir("================================\n");

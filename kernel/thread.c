@@ -308,38 +308,48 @@ void thread_yield(void) {
 }
 
 /* Ejecutar los hilos */
-int thread_run(void) {
-    if (scheduler_running)
-        return -1;
 
-    irq_disable();
+int thread_run(void) {
+    uint32_t flags = irq_save();
+
+    if (scheduler_running) {
+        irq_restore(flags);
+        return -1;
+    }
 
     int first = find_next(-1);
 
     if (first < 0) {
-        irq_enable();
+        irq_restore(flags);
         return -1;
     }
 
-   /* Guardar el CR3 que utiliza la shell */
-main_cr3 = thread_read_cr3();
+    /* Guardar el directorio principal */
+    main_cr3 = thread_read_cr3();
 
-scheduler_running = 1;
-current_thread = first;
+    scheduler_running = 1;
+    current_thread = first;
 
-/* Activar el directorio del primer hilo */
-uint32_t first_cr3 = thread_target_cr3(first);
+    /* Seleccionar CR3 del primer hilo */
+    uint32_t first_cr3 = thread_target_cr3(first);
 
-if (thread_read_cr3() != first_cr3) {
-    thread_load_cr3(first_cr3);
-}
+    if (paging_cpu_enabled() &&
+        thread_read_cr3() != first_cr3) {
+        thread_load_cr3(first_cr3);
+    }
 
-/* Comenzar la ejecucion del primer hilo */
-thread_enter(
-    &main_esp,
-    threads[first].esp
-);
-if (paging_cpu_enabled() &&
+    /* Ejecutar los hilos */
+    thread_enter(
+        &main_esp,
+        threads[first].esp
+    );
+
+    /*
+     * Cuando todos los hilos terminan,
+     * thread_finish debe regresar al
+     * directorio principal.
+     */
+    if (paging_cpu_enabled() &&
         thread_read_cr3() != main_cr3) {
 
         __asm__ volatile ("cli");
@@ -349,29 +359,21 @@ if (paging_cpu_enabled() &&
         }
     }
 
-    /* Continuar con la limpieza que ya tenias */
+    /* Restaurar el planificador */
     scheduler_running = 0;
     current_thread = -1;
 
-    irq_enable();
-if (thread_read_cr3() != main_cr3) {
-    /* Fallo grave del retorno al espacio principal */
-    __asm__ volatile ("cli");
-
-    for (;;) {
-        __asm__ volatile ("hlt");
-    }
-}
-
-    /* Estamos nuevamente en el contexto principal */
-    scheduler_running = 0;
-    current_thread = -1;
-
-    irq_enable();
-
+    /*
+     * Conservar interrupciones deshabilitadas
+     * mientras liberamos las pilas.
+     */
     for (int i = 0; i < MIOS_MAX_THREADS; i++) {
-        if (threads[i].stack != NULL)
-            memory_free_page(threads[i].stack);
+        if (threads[i].stack != NULL) {
+            if (memory_free_page(threads[i].stack) != 0) {
+                irq_restore(flags);
+                return -1;
+            }
+        }
 
         threads[i].stack = NULL;
         threads[i].function = NULL;
@@ -380,6 +382,7 @@ if (thread_read_cr3() != main_cr3) {
         threads[i].state = THREAD_FREE;
     }
 
+    irq_restore(flags);
     return 0;
 }
 
