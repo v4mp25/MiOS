@@ -6,6 +6,7 @@
 #include "thread.h"
 #include "address_space.h"
 #include "paging.h"
+#include "irq.h"
 
 typedef struct {
     ProcessInfo info;
@@ -190,3 +191,42 @@ int process_get_info(
     *out = processes[index].info;
     return 0;
 }
+
+/*
+ * Recuperar descriptores de procesos terminados.
+ *
+ * Solo recupera procesos TERMINATED
+ * cuyo espacio de direcciones ya fue liberado.
+ *
+ * No cancela procesos activos.
+ */
+int process_reap(void) {
+    uint32_t flags = irq_save();
+    int recovered = 0;
+
+    for (uint32_t i = 0;
+         i < MIOS_MAX_PROCESSES;
+         i++) {
+
+        Process *p = &processes[i];
+
+        if (p->info.state != PROCESS_TERMINATED)
+            continue;
+
+        /* No borrar procesos con memoria pendiente */
+        if (p->info.asid != 0)
+            continue;
+
+        p->info.pid = 0;
+        p->info.name[0] = '\0';
+        p->info.state = PROCESS_FREE;
+        p->info.asid = 0;
+        p->entry = NULL;
+
+        recovered++;
+    }
+
+    irq_restore(flags);
+    return recovered;
+}
+

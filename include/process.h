@@ -37,5 +37,6 @@ int process_get_info(
     uint32_t index,
     ProcessInfo *out
 );
-
+/* Recuperar descriptores de procesos terminados */
+int process_reap(void);
 #endif

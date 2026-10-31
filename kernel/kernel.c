@@ -422,7 +422,74 @@ static void process_cr3_task_a(void) {
 static void process_cr3_task_b(void) {
     process_cr3_worker(1);
 }
+typedef struct __attribute__((packed)) {
+    uint16_t limit;
+    uint32_t base;
+} GdtRegister;
 
+static void mostrar_gdt(void) {
+    GdtRegister gdtr;
+
+    uint16_t cs;
+    uint16_t ds;
+    uint16_t ss;
+    uint16_t tr;
+
+    __asm__ volatile (
+        "sgdt %0"
+        : "=m"(gdtr)
+    );
+
+    __asm__ volatile (
+        "mov %%cs, %0"
+        : "=r"(cs)
+    );
+
+    __asm__ volatile (
+        "mov %%ds, %0"
+        : "=r"(ds)
+    );
+
+    __asm__ volatile (
+        "mov %%ss, %0"
+        : "=r"(ss)
+    );
+
+    __asm__ volatile (
+        "str %0"
+        : "=r"(tr)
+    );
+
+    imprimir("=== DIAGNOSTICO GDT MIOS ===\n");
+
+    imprimir("Direccion GDT: ");
+    imprimir_hex32(gdtr.base);
+    imprimir("\n");
+
+    imprimir("Limite GDT: ");
+    imprimir_numero(gdtr.limit);
+    imprimir("\n");
+
+    imprimir("CS: ");
+    imprimir_hex32(cs);
+    imprimir("\n");
+
+    imprimir("DS: ");
+    imprimir_hex32(ds);
+    imprimir("\n");
+
+    imprimir("SS: ");
+    imprimir_hex32(ss);
+    imprimir("\n");
+
+    imprimir("TR: ");
+    imprimir_hex32(tr);
+    imprimir("\n");
+
+    imprimir("Nivel privilegio actual: ");
+    imprimir_numero(cs & 3U);
+    imprimir("\n");
+}
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -473,6 +540,8 @@ else if (iguales(linea, "help")) {
     imprimir("ascreate, aslist, asdestroy ID\n");
     imprimir("asbusytest\n");
     imprimir("processcr3test\n");
+    imprimir("procclean\n");
+    imprimir("gdtinfo\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -1992,6 +2061,25 @@ else if (iguales(linea, "processcr3test")) {
     }
 }
 
+else if (iguales(linea, "procclean")) {
+    imprimir("=== LIMPIEZA DE PROCESOS ===\n");
+
+    int recovered = process_reap();
+
+    imprimir("Descriptores recuperados: ");
+    imprimir_numero((uint32_t)recovered);
+    imprimir("\n");
+
+    imprimir("PROCESS CLEANUP: OK\n");
+}
+
+/* MiOS - Diagnostico de la GDT actual */
+
+
+
+else if (iguales(linea, "gdtinfo")) {
+    mostrar_gdt();
+}
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;

@@ -46,7 +46,7 @@ clean:
 	rm -rf iso/boot
 interrupts.o: boot/interrupts.asm
 	$(ASM) -f elf32 boot/interrupts.asm -o interrupts.o
-process.o: kernel/process.c include/process.h include/thread.h include/address_space.h include/paging.h
+process.o: kernel/process.c include/process.h include/thread.h include/address_space.h include/paging.h include/irq.h
 	$(CC) $(CFLAGS) -c kernel/process.c -o process.o
 pmm.o: kernel/pmm.c include/pmm.h include/memory_map.h
 	$(CC) $(CFLAGS) -c kernel/pmm.c -o pmm.o
