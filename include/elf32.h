@@ -104,4 +104,23 @@ int elf32_validate_segments(
     Elf32_LoadInfo *result
 );
 
+/*
+ * Cargar un ELF32 validado en la pagina
+ * de codigo/datos de un espacio USER.
+ *
+ * address_space_id: ID devuelto por as_create()
+ * entry: recibe la direccion de entrada
+ *
+ * Devuelve 0 si tuvo exito, -1 si fallo.
+ *
+ * Solo admite el rango de una pagina
+ * definido en MIOS_ELF_USER_BASE/LIMIT.
+ */
+int elf32_load(
+    const void *image,
+    uint32_t size,
+    uint32_t address_space_id,
+    uint32_t *entry
+);
+
 #endif

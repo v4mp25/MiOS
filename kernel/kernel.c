@@ -746,6 +746,140 @@ static int elf32_segment_selftest(void) {
 }
 
 
+static int elf32_load_selftest(void) {
+    /*
+     * Imagen ELF sintetica:
+     * cabecera + encabezado PT_LOAD +
+     * instrucciones en offset 128.
+     */
+    uint8_t image[160] = {0};
+
+    Elf32_Ehdr header = {0};
+    Elf32_Phdr segment = {0};
+
+    header.e_ident[0] = ELF32_MAGIC0;
+    header.e_ident[1] = ELF32_MAGIC1;
+    header.e_ident[2] = ELF32_MAGIC2;
+    header.e_ident[3] = ELF32_MAGIC3;
+    header.e_ident[4] = ELFCLASS32;
+    header.e_ident[5] = ELFDATA2LSB;
+    header.e_ident[6] = EV_CURRENT;
+
+    header.e_type = ET_EXEC;
+    header.e_machine = EM_386;
+    header.e_version = EV_CURRENT;
+    header.e_entry = MIOS_ELF_USER_BASE;
+    header.e_ehsize = sizeof(Elf32_Ehdr);
+    header.e_phoff = sizeof(Elf32_Ehdr);
+    header.e_phentsize = sizeof(Elf32_Phdr);
+    header.e_phnum = 1;
+
+    segment.p_type = PT_LOAD;
+    segment.p_offset = 128U;
+    segment.p_vaddr = MIOS_ELF_USER_BASE;
+    segment.p_filesz = 14U;
+    segment.p_memsz = 32U;
+    segment.p_flags = ELF_PF_R | ELF_PF_X;
+    segment.p_align = 1U;
+
+    const uint8_t *h =
+        (const uint8_t *)&header;
+
+    for (uint32_t i = 0;
+         i < sizeof(header); i++) {
+        image[i] = h[i];
+    }
+
+    const uint8_t *p =
+        (const uint8_t *)&segment;
+
+    for (uint32_t i = 0;
+         i < sizeof(segment); i++) {
+        image[52U + i] = p[i];
+    }
+
+    /*
+     * Programa de ejemplo:
+     * SYS_TEST, SYS_EXIT, UD2.
+     */
+    static const uint8_t code[14] = {
+        0xB8, 0x01, 0x00, 0x00, 0x00,
+        0xCD, 0x80,
+        0xB8, 0x02, 0x00, 0x00, 0x00,
+        0xCD, 0x80
+    };
+
+    for (uint32_t i = 0; i < sizeof(code); i++) {
+        image[128U + i] = code[i];
+    }
+
+    Elf32_LoadInfo info;
+
+    if (elf32_validate_segments(
+            image, sizeof(image), &info
+        ) != 0) {
+        return -1;
+    }
+
+    int id = as_create();
+
+    if (id < 0)
+        return -1;
+
+    int ok = 1;
+
+    uint32_t cr3 = 0;
+    uint32_t physical_frame = 0;
+    uint32_t entry = 0;
+
+    if (as_get(
+            (uint32_t)id,
+            &cr3,
+            &physical_frame
+        ) != 0) {
+        ok = 0;
+    }
+
+    if (ok && elf32_load(
+            image,
+            sizeof(image),
+            (uint32_t)id,
+            &entry
+        ) != 0) {
+        ok = 0;
+    }
+
+    if (ok) {
+        const uint8_t *loaded =
+            (const uint8_t *)(uintptr_t)
+            physical_frame;
+
+        if (entry != MIOS_ELF_USER_BASE)
+            ok = 0;
+
+        /* Los bytes del ELF coinciden */
+        for (uint32_t i = 0;
+             i < sizeof(code); i++) {
+
+            if (loaded[i] != code[i])
+                ok = 0;
+        }
+
+        /* BSS y resto de pagina a cero */
+        for (uint32_t i = sizeof(code);
+             i < 4096U; i++) {
+
+            if (loaded[i] != 0)
+                ok = 0;
+        }
+    }
+
+    if (as_destroy((uint32_t)id) != 0)
+        ok = 0;
+
+    return ok ? 0 : -1;
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -818,6 +952,7 @@ else if (iguales(linea, "help")) {
     imprimir("userpidtest\n");
     imprimir("elftest\n");
     imprimir("elfsegmenttest\n");
+    imprimir("elfloadtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -3771,6 +3906,42 @@ else if (iguales(linea, "elfsegmenttest")) {
     }
 }
 
+
+else if (iguales(linea, "elfloadtest")) {
+    imprimir("=== CARGADOR ELF32 MIOS ===\n");
+
+    if (!paging_cpu_enabled() ||
+        as_count() != 0U) {
+
+        imprimir("Activa pagingon y libera espacios.\n");
+
+    } else {
+        uint32_t before = pmm_free_frames();
+
+        int ok = elf32_load_selftest() == 0;
+
+        if (ok)
+            imprimir("Segmento PT_LOAD copiado: OK\n");
+
+        if (ok)
+            imprimir("Direccion de entrada: OK\n");
+
+        if (ok)
+            imprimir("Memoria BSS inicializada: OK\n");
+
+        if (as_count() != 0U ||
+            pmm_free_frames() != before) {
+            ok = 0;
+        }
+
+        if (ok) {
+            imprimir("Memoria recuperada: OK\n");
+            imprimir("ELF LOAD TEST: OK\n");
+        } else {
+            imprimir("ELF LOAD TEST: ERROR\n");
+        }
+    }
+}
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
