@@ -20,6 +20,61 @@ static uint8_t kernel_stacks
 
 static UserTask tasks[MIOS_USER_TASK_COUNT];
 
+/*
+ * Prepara el contexto inicial de una tarea.
+ *
+ * El marco tiene el mismo orden que produce
+ * irq0_stub al guardar un contexto Ring 3:
+ *
+ * PUSHAD (8 palabras)
+ * GS, FS, ES, DS (4 palabras)
+ * EIP, CS, EFLAGS, ESP, SS (5 palabras)
+ *
+ * Total: 17 palabras de 32 bits.
+ */
+static void user_task_build_initial_frame(uint32_t i) {
+    UserTask *task = &tasks[i];
+
+    uint32_t *frame =
+        (uint32_t *)(uintptr_t)
+        (task->kernel_esp0 - 17U * sizeof(uint32_t));
+
+    /* Inicializar los registros generales */
+    for (uint32_t j = 0; j < 17U; j++) {
+        frame[j] = 0;
+    }
+
+    /*
+     * Registros PUSHAD:
+     * 0 EDI
+     * 1 ESI
+     * 2 EBP
+     * 3 ESP ignorado por POPAD
+     * 4 EBX
+     * 5 EDX
+     * 6 ECX
+     * 7 EAX
+     */
+
+    /* Segmentos de usuario */
+    frame[8]  = 0x23U; /* GS */
+    frame[9]  = 0x23U; /* FS */
+    frame[10] = 0x23U; /* ES */
+    frame[11] = 0x23U; /* DS */
+
+    /* Marco IRETD hacia Ring 3 */
+    frame[12] = task->user_eip;
+    frame[13] = 0x1BU;     /* CS de usuario */
+    frame[14] = 0x00000202U; /* EFLAGS, IF=1 */
+    frame[15] = task->user_esp;
+    frame[16] = 0x23U;     /* SS de usuario */
+
+    /* Guardar punto de restauracion */
+    task->saved_kernel_esp =
+        (uint32_t)(uintptr_t)frame;
+}
+
+
 static void task_clear(uint32_t i) {
     tasks[i].state = USER_TASK_FREE;
     tasks[i].address_space_id = 0;
@@ -29,6 +84,7 @@ static void task_clear(uint32_t i) {
     tasks[i].user_eip = 0;
     tasks[i].user_esp = 0;
     tasks[i].kernel_esp0 = 0;
+    tasks[i].saved_kernel_esp = 0;
 }
 
 const UserTask *user_task_get(uint32_t index) {
@@ -121,7 +177,8 @@ int user_tasks_prepare(void) {
             (uint32_t)(uintptr_t)(
                 kernel_stacks[i] + 16384
             );
-
+/* Preparar el contexto inicial de CPU */
+user_task_build_initial_frame(i);
         tasks[i].state = USER_TASK_READY;
     }
 
@@ -230,6 +287,61 @@ int user_tasks_verify(void) {
     if (tasks[0].kernel_esp0 ==
         tasks[1].kernel_esp0)
         return -1;
+
+    return 0;
+}
+
+int user_tasks_context_verify(void) {
+    for (uint32_t i = 0;
+         i < MIOS_USER_TASK_COUNT;
+         i++) {
+
+        const UserTask *task = &tasks[i];
+
+        if (task->state != USER_TASK_READY)
+            return -1;
+
+        uint32_t expected_esp =
+            (uint32_t)(uintptr_t)(
+                kernel_stacks[i] + 16384
+            ) - 17U * sizeof(uint32_t);
+
+        if (task->saved_kernel_esp != expected_esp)
+            return -1;
+
+        const uint32_t *frame =
+            (const uint32_t *)(uintptr_t)
+            task->saved_kernel_esp;
+
+        /* Registros generales inicialmente en cero */
+        for (uint32_t j = 0; j < 8U; j++) {
+            if (frame[j] != 0U)
+                return -1;
+        }
+
+        /* Selectores de datos Ring 3 */
+        if (frame[8]  != 0x23U ||
+            frame[9]  != 0x23U ||
+            frame[10] != 0x23U ||
+            frame[11] != 0x23U) {
+            return -1;
+        }
+
+        /* Marco de retorno Ring 3 */
+        if (frame[12] != task->user_eip ||
+            frame[13] != 0x1BU ||
+            frame[14] != 0x00000202U ||
+            frame[15] != task->user_esp ||
+            frame[16] != 0x23U) {
+            return -1;
+        }
+    }
+
+    /* Ninguna tarea comparte su contexto */
+    if (tasks[0].saved_kernel_esp ==
+        tasks[1].saved_kernel_esp) {
+        return -1;
+    }
 
     return 0;
 }

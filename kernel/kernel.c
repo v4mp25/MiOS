@@ -2623,17 +2623,29 @@ else if (iguales(linea, "usertasktest")) {
             imprimir("ERROR: preparando tareas.\n");
             ok = 0;
         } else {
-            if (user_tasks_verify() != 0) {
-                imprimir("ERROR: verificando tareas.\n");
-                ok = 0;
-            } else {
-                imprimir("Tarea 1 preparada: OK\n");
-                imprimir("Tarea 2 preparada: OK\n");
-                imprimir("CR3 independientes: OK\n");
-                imprimir("Pilas USER independientes: OK\n");
-                imprimir("Pilas kernel independientes: OK\n");
-                imprimir("Programas cargados: OK\n");
-            }
+            
+if (user_tasks_verify() != 0) {
+    imprimir("ERROR: verificando tareas.\n");
+    ok = 0;
+} else {
+    imprimir("Tarea 1 preparada: OK\n");
+    imprimir("Tarea 2 preparada: OK\n");
+    imprimir("CR3 independientes: OK\n");
+    imprimir("Pilas USER independientes: OK\n");
+    imprimir("Pilas kernel independientes: OK\n");
+    imprimir("Programas cargados: OK\n");
+
+    if (user_tasks_context_verify() == 0) {
+        imprimir("Contexto inicial tarea 0: OK\n");
+        imprimir("Contexto inicial tarea 1: OK\n");
+        imprimir("Registros y segmentos: OK\n");
+        imprimir("Marcos IRETD independientes: OK\n");
+    } else {
+        imprimir("ERROR: contextos iniciales.\n");
+        ok = 0;
+    }
+}
+
         }
 
         if (user_tasks_cleanup() != 0) {

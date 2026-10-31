@@ -22,9 +22,16 @@ typedef struct {
     uint32_t code_frame;
     uint32_t stack_frame;
 
-    uint32_t user_eip;
-    uint32_t user_esp;
-    uint32_t kernel_esp0;
+    
+uint32_t user_eip;
+uint32_t user_esp;
+
+/* Limite superior de la pila privilegiada */
+uint32_t kernel_esp0;
+
+/* ESP que apunta al contexto guardado */
+uint32_t saved_kernel_esp;
+
 } UserTask;
 
 int user_tasks_prepare(void);
@@ -32,5 +39,6 @@ int user_tasks_verify(void);
 int user_tasks_cleanup(void);
 
 const UserTask *user_task_get(uint32_t index);
-
+/* Verificar los marcos iniciales de CPU */
+int user_tasks_context_verify(void);
 #endif
