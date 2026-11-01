@@ -987,6 +987,7 @@ else if (iguales(linea, "help")) {
     imprimir("elfdiskrun\n");   
     imprimir("binfstest\n");
     imprimir("run archivo.elf\n");
+    imprimir("syswritestats\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4503,6 +4504,21 @@ else if (iguales(linea, "run")) {
     }
 }
 
+
+else if (iguales(linea, "syswritestats")) {
+    uint32_t accepted = syscall_write_accepted();
+    uint32_t rejected = syscall_write_rejected();
+
+    imprimir("=== ESTADISTICAS SYS_WRITE ===\n");
+
+    imprimir("Solicitudes aceptadas: ");
+    imprimir_hex32(accepted);
+    imprimir("\n");
+
+    imprimir("Solicitudes rechazadas: ");
+    imprimir_hex32(rejected);
+    imprimir("\n");
+}
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);

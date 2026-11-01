@@ -53,5 +53,9 @@ int syscall_audit_get(
     SyscallAudit *result
 );
 
+/* Diagnostico de proteccion SYS_WRITE */
+uint32_t syscall_write_accepted(void);
+uint32_t syscall_write_rejected(void);
+
 #endif
 

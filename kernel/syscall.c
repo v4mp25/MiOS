@@ -17,6 +17,8 @@ extern void syscall_console_putc(char c);
 
 static volatile uint32_t test_count = 0;
 static volatile uint32_t exit_count = 0;
+static volatile uint32_t write_accepted = 0;
+static volatile uint32_t write_rejected = 0;
 
 /*
  * Auditoria de syscalls de la sesion USER.
@@ -104,30 +106,30 @@ void syscall_dispatch(
             exit_count++;
             break;
 
-        case MIOS_SYS_WRITE:
+       
+        case MIOS_SYS_WRITE: {
             /*
-             * Solo aceptar llamadas provenientes
-             * del codigo Ring 3.
+             * Rechazar solicitudes que no
+             * procedan de Ring 3.
              */
             if ((saved_cs & 3U) != 3U) {
+                write_rejected++;
                 break;
             }
 
             /*
-             * Comprobar el puntero, la longitud
-             * y los permisos USER antes de leer.
+             * Comprobar limites, longitud
+             * y permisos de paginas USER.
              */
             if (user_memory_readable(
                     user_pointer,
                     length
                 ) != 0) {
+
+                write_rejected++;
                 break;
             }
 
-            /*
-             * El kernel puede acceder al rango
-             * validado del proceso activo.
-             */
             const uint8_t *text =
                 (const uint8_t *)(uintptr_t)
                 user_pointer;
@@ -135,12 +137,15 @@ void syscall_dispatch(
             for (uint32_t i = 0;
                  i < length;
                  i++) {
+
                 syscall_console_putc(
                     (char)text[i]
                 );
             }
 
+            write_accepted++;
             break;
+        }
 
         default:
             break;
@@ -191,6 +196,24 @@ uint32_t syscall_ring3_count(void) {
 uint32_t syscall_ring0_count(void) {
     uint32_t flags = irq_save();
     uint32_t result = ring0_calls;
+    irq_restore(flags);
+    return result;
+}
+
+uint32_t syscall_write_accepted(void) {
+    uint32_t flags = irq_save();
+
+    uint32_t result = write_accepted;
+
+    irq_restore(flags);
+    return result;
+}
+
+uint32_t syscall_write_rejected(void) {
+    uint32_t flags = irq_save();
+
+    uint32_t result = write_rejected;
+
     irq_restore(flags);
     return result;
 }
