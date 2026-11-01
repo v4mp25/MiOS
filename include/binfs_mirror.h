@@ -78,4 +78,19 @@ int binfs_catalog_current(
     uint32_t *active_lba
 );
 
+/*
+ * Reparar un catalogo BINFS v2 dañado.
+ *
+ * Solo permite reparar cuando:
+ * - Exactamente una copia es valida.
+ * - El otro catalogo esta dañado.
+ *
+ * La verificacion de integridad de
+ * archivos debe realizarse antes.
+ *
+ *  0 = reparacion completada
+ * -1 = no se puede reparar
+ */
+int binfs_catalog_repair(void);
+
 #endif

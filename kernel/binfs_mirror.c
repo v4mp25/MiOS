@@ -14,6 +14,9 @@
 
 static uint8_t catalog_primary[ATA_SECTOR_SIZE];
 static uint8_t catalog_mirror[ATA_SECTOR_SIZE];
+/* Buffers exclusivos para reparar catalogos */
+static uint8_t repair_source[ATA_SECTOR_SIZE];
+static uint8_t repair_verify[ATA_SECTOR_SIZE];
 /* Buffers para publicacion controlada */
 static uint8_t publish_current[ATA_SECTOR_SIZE];
 static uint8_t publish_candidate[ATA_SECTOR_SIZE];
@@ -561,6 +564,154 @@ int binfs_catalog_publish(
         after.selected_lba != target_lba ||
         after.selected_generation !=
             next_generation) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    irq_restore(flags);
+    return 0;
+}
+
+/*
+ * MiOS - Reparacion de catalogo BINFS v2.
+ *
+ * Copia los 512 bytes del catalogo valido
+ * sobre el catalogo invalido.
+ *
+ * No modifica sectores de archivos.
+ */
+int binfs_catalog_repair(void) {
+    uint32_t flags = irq_save();
+
+    BinfsGenerationStatus status;
+
+    /* Identificar las copias validas */
+    if (binfs_generation_check(&status) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Exigir exactamente una copia valida.
+     * Si ambas son validas, no reparar.
+     */
+    if (status.primary_valid ==
+        status.mirror_valid) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    uint32_t source_lba = 0;
+    uint32_t target_lba = 0;
+
+    if (status.primary_valid) {
+        source_lba =
+            BINFS_PRIMARY_CATALOG_LBA;
+
+        target_lba =
+            BINFS_MIRROR_CATALOG_LBA;
+    } else {
+        source_lba =
+            BINFS_MIRROR_CATALOG_LBA;
+
+        target_lba =
+            BINFS_PRIMARY_CATALOG_LBA;
+    }
+
+    /*
+     * Leer nuevamente el catalogo valido.
+     */
+    if (ata_read_sector(
+            source_lba,
+            repair_source
+        ) != 0) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Comprobar su checksum y formato */
+    if (!binfs_catalog_valid_v2(
+            repair_source
+        )) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Verificar que no haya cambiado
+     * la generacion durante la operacion.
+     */
+    uint32_t generation =
+        binfs_read_u32(
+            &repair_source[GEN_OFFSET]
+        );
+
+    if (generation !=
+        status.selected_generation) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Escribir solo la copia invalida.
+     * La fuente valida queda intacta.
+     */
+    if (ata_write_sector(
+            target_lba,
+            repair_source
+        ) != 0) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Verificar el sector reparado */
+    if (ata_read_sector(
+            target_lba,
+            repair_verify
+        ) != 0) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    for (uint32_t i = 0;
+         i < ATA_SECTOR_SIZE;
+         i++) {
+
+        if (repair_verify[i] !=
+            repair_source[i]) {
+
+            irq_restore(flags);
+            return -1;
+        }
+    }
+
+    /* Confirmar formato y checksum */
+    if (!binfs_catalog_valid_v2(
+            repair_verify
+        )) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Ambas copias deben ser validas
+     * y contener la misma generacion.
+     */
+    BinfsGenerationStatus after;
+
+    if (binfs_generation_check(&after) != 0 ||
+        !after.primary_valid ||
+        !after.mirror_valid ||
+        after.primary_generation != generation ||
+        after.mirror_generation != generation) {
 
         irq_restore(flags);
         return -1;

@@ -1003,6 +1003,7 @@ else if (iguales(linea, "help")) {
     imprimir("binmirrorcheck\n");
     imprimir("bingencheck\n");
     imprimir("binpublishcheck\n");
+    imprimir("binrepair\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4971,6 +4972,50 @@ else if (iguales(linea, "binpublishcheck")) {
 
     } else {
         imprimir("BIN PUBLISH CHECK: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "binrepair")) {
+    imprimir("=== REPARACION BINFS A/B ===\n");
+
+    BinfsGenerationStatus status;
+
+    if (binfs_generation_check(&status) != 0) {
+        imprimir("ERROR: no existe catalogo valido.\n");
+
+    } else if (status.primary_valid &&
+               status.mirror_valid) {
+
+        imprimir("Ambos catalogos son validos.\n");
+        imprimir("No se requiere reparacion.\n");
+
+    } else {
+        /*
+         * Antes de reparar metadatos,
+         * verificar los archivos accesibles.
+         */
+        BinfsVerifyResult verification;
+
+        if (binfs_verify_all(&verification) != 0) {
+            imprimir("ERROR: archivos no integros.\n");
+            imprimir("Reparacion cancelada.\n");
+
+        } else {
+            imprimir("Archivos verificados: OK\n");
+
+            if (binfs_catalog_repair() != 0) {
+                imprimir("BIN REPAIR: ERROR\n");
+
+            } else if (binfs_mirror_verify() != 0) {
+                imprimir("ERROR: catalogos diferentes.\n");
+
+            } else {
+                imprimir("Catalogo reconstruido: OK\n");
+                imprimir("Checksum: OK\n");
+                imprimir("Generaciones sincronizadas: OK\n");
+                imprimir("BIN REPAIR: OK\n");
+            }
+        }
     }
 }
 
