@@ -1198,37 +1198,33 @@ int binfs_replace_file(
      * el destino debe continuar en
      * su region original.
      */
-    if (current_lba != original_lba) {
-        irq_restore(flags);
-        return -1;
-    }
+   
+/*
+ * La version activa puede estar
+ * en la region A o en la region B.
+ */
+if (current_lba != original_lba &&
+    current_lba != shadow_lba) {
+
+    irq_restore(flags);
+    return -1;
+}
+
+/*
+ * Seleccionar siempre la region
+ * que NO esta activa.
+ */
+uint32_t target_lba =
+    current_lba == original_lba
+        ? shadow_lba
+        : original_lba;
+
 
     /*
      * No sobrescribir informacion
      * existente en la region alternativa.
      */
-    for (uint32_t s = 0;
-         s < BINFS_SECTORS_PER_FILE;
-         s++) {
-
-        if (ata_read_sector(
-                shadow_lba + s,
-                sector
-            ) != 0) {
-            irq_restore(flags);
-            return -1;
-        }
-
-        for (uint32_t j = 0;
-             j < BINFS_SECTOR_SIZE;
-             j++) {
-
-            if (sector[j] != 0U) {
-                irq_restore(flags);
-                return -1;
-            }
-        }
-    }
+    
 
     /*
      * Escribir primero el contenido nuevo
@@ -1254,7 +1250,7 @@ int binfs_replace_file(
         }
 
         if (ata_write_sector(
-                shadow_lba + s,
+                target_lba + s,
                 sector
             ) != 0) {
 
@@ -1272,7 +1268,7 @@ int binfs_replace_file(
          s++) {
 
         if (ata_read_sector(
-                shadow_lba + s,
+                target_lba + s,
                 sector
             ) != 0) {
             irq_restore(flags);
@@ -1320,7 +1316,7 @@ int binfs_replace_file(
      */
     for (uint32_t i = 0; i < 4U; i++) {
         catalog[entry_offset + 32U + i] =
-            (uint8_t)(shadow_lba >> (i * 8U));
+    (uint8_t)(target_lba >> (i * 8U));
 
         catalog[entry_offset + 36U + i] =
             (uint8_t)(size >> (i * 8U));
