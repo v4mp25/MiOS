@@ -1005,6 +1005,7 @@ else if (iguales(linea, "help")) {
     imprimir("binpublishcheck\n");
     imprimir("binrepair\n");
     imprimir("binconsistency\n");
+    imprimir("binrecoverycheck\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5077,6 +5078,66 @@ else if (iguales(linea, "binconsistency")) {
         } else {
             imprimir("Datos activos: NO VERIFICADOS\n");
             imprimir("BIN CONSISTENCY: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "binrecoverycheck")) {
+    imprimir("=== RECUPERACION BINFS A/B ===\n");
+
+    BinfsRecoveryReport report;
+
+    if (binfs_recovery_check(&report) != 0) {
+        imprimir("BIN RECOVERY CHECK: ERROR\n");
+
+    } else {
+        imprimir("Catalogo activo LBA: ");
+        imprimir_hex32(report.active_lba);
+        imprimir("\n");
+
+        imprimir("Generacion activa: ");
+        imprimir_hex32(report.active_generation);
+        imprimir("\n");
+
+        imprimir("Datos activos: ");
+        imprimir(
+            report.active_data_ok
+                ? "OK\n" : "ERROR\n"
+        );
+
+        imprimir("Datos alternativos: ");
+        imprimir(
+            report.fallback_data_ok
+                ? "OK\n" : "NO RECUPERABLES\n"
+        );
+
+        imprimir("Versiones integras: ");
+        imprimir_hex32(
+            report.recoverable_catalogs
+        );
+        imprimir("\n");
+
+        if (!report.active_data_ok) {
+            imprimir(
+                "ALERTA: version activa danada.\n"
+            );
+            imprimir(
+                "No ejecutar actualizaciones.\n"
+            );
+            imprimir("BIN RECOVERY CHECK: ERROR\n");
+
+        } else if (report.full_fallback_available) {
+            imprimir("Version activa: OK\n");
+            imprimir("Respaldo recuperable: OK\n");
+            imprimir("BIN RECOVERY CHECK: OK\n");
+
+        } else {
+            imprimir("Version activa: OK\n");
+            imprimir("Respaldo completo: NO\n");
+            imprimir(
+                "Se necesita nueva proteccion.\n"
+            );
+            imprimir("BIN RECOVERY CHECK: PARCIAL\n");
         }
     }
 }

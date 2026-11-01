@@ -281,3 +281,72 @@ int binfs_consistency_check(
 
     return (read_a == 0 || read_b == 0) ? 0 : -1;
 }
+
+/*
+ * Determinar si la version activa
+ * y la alternativa tienen datos integros.
+ *
+ * Solo lectura.
+ */
+int binfs_recovery_check(
+    BinfsRecoveryReport *result
+) {
+    if (result == NULL)
+        return -1;
+
+    BinfsConsistencyReport report;
+
+    if (binfs_consistency_check(&report) != 0)
+        return -1;
+
+    result->active_lba = report.selected_lba;
+    result->active_generation =
+        report.selected_generation;
+
+    result->active_data_ok = 0;
+    result->fallback_data_ok = 0;
+    result->recoverable_catalogs = 0;
+    result->full_fallback_available = 0;
+
+    /*
+     * Un catalogo es recuperable solo
+     * cuando sus metadatos y todos los
+     * datos referenciados son integros.
+     */
+    uint32_t valid_a =
+        report.a.catalog_valid &&
+        report.a.data_consistent;
+
+    uint32_t valid_b =
+        report.b.catalog_valid &&
+        report.b.data_consistent;
+
+    result->recoverable_catalogs =
+        valid_a + valid_b;
+
+    if (report.selected_lba ==
+        BINFS_PRIMARY_CATALOG_LBA) {
+
+        result->active_data_ok = valid_a;
+        result->fallback_data_ok = valid_b;
+
+    } else if (report.selected_lba ==
+               BINFS_MIRROR_CATALOG_LBA) {
+
+        result->active_data_ok = valid_b;
+        result->fallback_data_ok = valid_a;
+
+    } else {
+        return -1;
+    }
+
+    /*
+     * Una segunda version completa
+     * existe cuando el otro catalogo
+     * tambien es coherente con sus datos.
+     */
+    result->full_fallback_available =
+        result->fallback_data_ok ? 1U : 0U;
+
+    return 0;
+}

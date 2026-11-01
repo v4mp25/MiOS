@@ -36,4 +36,24 @@ int binfs_consistency_check(
     BinfsConsistencyReport *result
 );
 
+/*
+ * Diagnostico de recuperacion BINFS.
+ *
+ * No modifica el disco.
+ */
+typedef struct {
+    uint32_t active_lba;
+    uint32_t active_generation;
+
+    uint32_t active_data_ok;
+    uint32_t fallback_data_ok;
+
+    uint32_t recoverable_catalogs;
+    uint32_t full_fallback_available;
+} BinfsRecoveryReport;
+
+int binfs_recovery_check(
+    BinfsRecoveryReport *result
+);
+
 #endif
