@@ -10,6 +10,8 @@
 
 #define BINFS_SECTOR_SIZE 512U
 #define BINFS_SECTORS_PER_FILE 16U
+/* Segunda region de almacenamiento por slot */
+#define BINFS_SHADOW_LBA 1024U
 
 #define BINFS_MAX_FILES 4U
 #define BINFS_ENTRY_SIZE 64U
@@ -17,6 +19,8 @@
 
 static uint8_t catalog[BINFS_SECTOR_SIZE];
 static uint8_t sector[BINFS_SECTOR_SIZE];
+/* Buffer exclusivo para actualizaciones */
+static uint8_t replace_buffer[BINFS_MAX_FILE_SIZE];
 /*
  * Buffer de 8192 bytes para copiar
  * un archivo completo dentro de BINFS.
@@ -141,8 +145,12 @@ int binfs_read(
         uint32_t permitted_lba =
             BINFS_DATA_LBA +
             index * BINFS_SECTORS_PER_FILE;
+            uint32_t shadow_lba =
+    BINFS_SHADOW_LBA +
+    index * BINFS_SECTORS_PER_FILE;
 
-        if (lba != permitted_lba ||
+        if ((lba != permitted_lba &&
+     lba != shadow_lba) ||
             size == 0U ||
             size > BINFS_MAX_FILE_SIZE ||
             size > capacity) {
@@ -242,8 +250,12 @@ static int binfs_decode_entry(
     uint32_t permitted_lba =
         BINFS_DATA_LBA +
         index * BINFS_SECTORS_PER_FILE;
+        uint32_t shadow_lba =
+    BINFS_SHADOW_LBA +
+    index * BINFS_SECTORS_PER_FILE;
 
-    if (lba != permitted_lba ||
+    if ((lba != permitted_lba &&
+     lba != shadow_lba)||
         size == 0U ||
         size > BINFS_MAX_FILE_SIZE) {
         return -1;
@@ -1055,3 +1067,319 @@ int binfs_remove_file(const char *filename) {
     return 0;
 }
 
+
+int binfs_replace_file(
+    const char *source,
+    const char *destination
+) {
+    if (source == 0 || destination == 0)
+        return -1;
+
+    /* Validar los dos nombres */
+    const char *names[2] = {
+        source, destination
+    };
+
+    for (uint32_t n = 0; n < 2U; n++) {
+        uint32_t len = 0;
+
+        while (len < 32U &&
+               names[n][len] != '\0') {
+
+            uint8_t c = (uint8_t)names[n][len];
+
+            if (c < 33U || c > 126U ||
+                c == '/' || c == '\\')
+                return -1;
+
+            len++;
+        }
+
+        if (len == 0U || len >= 32U)
+            return -1;
+    }
+
+    /* No sustituir un archivo por si mismo */
+    uint32_t different = 0;
+
+    for (uint32_t i = 0; i < 32U; i++) {
+        if (source[i] != destination[i]) {
+            different = 1;
+            break;
+        }
+
+        if (source[i] == '\0')
+            break;
+    }
+
+    if (!different)
+        return -1;
+
+    /*
+     * Leer el origen completo.
+     * binfs_read verifica su checksum.
+     */
+    uint32_t size = 0;
+
+    if (binfs_read(
+            source,
+            replace_buffer,
+            sizeof(replace_buffer),
+            &size
+        ) != 0)
+        return -1;
+
+    if (size == 0U ||
+        size > BINFS_MAX_FILE_SIZE)
+        return -1;
+
+    uint32_t flags = irq_save();
+
+    int slots = binfs_load_catalog();
+
+    if (slots <= 0 ||
+        slots > (int)BINFS_MAX_FILES) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    int source_index = -1;
+    int target_index = -1;
+
+    for (int i = 0; i < slots; i++) {
+        uint32_t off =
+            BINFS_FIRST_ENTRY +
+            (uint32_t)i * BINFS_ENTRY_SIZE;
+
+        if (catalog[off] == 0U)
+            continue;
+
+        BinfsEntry entry;
+
+        if (binfs_decode_entry(
+                (uint32_t)i, &entry
+            ) != 0) {
+            irq_restore(flags);
+            return -1;
+        }
+
+        if (names_equal(source, &catalog[off]))
+            source_index = i;
+
+        if (names_equal(destination, &catalog[off]))
+            target_index = i;
+    }
+
+    if (source_index < 0 ||
+        target_index < 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    uint32_t index = (uint32_t)target_index;
+
+    uint32_t entry_offset =
+        BINFS_FIRST_ENTRY +
+        index * BINFS_ENTRY_SIZE;
+
+    uint32_t original_lba =
+        BINFS_DATA_LBA +
+        index * BINFS_SECTORS_PER_FILE;
+
+    uint32_t shadow_lba =
+        BINFS_SHADOW_LBA +
+        index * BINFS_SECTORS_PER_FILE;
+
+    uint32_t current_lba =
+        read_u32(&catalog[entry_offset + 32U]);
+
+    /*
+     * Primera version:
+     * el destino debe continuar en
+     * su region original.
+     */
+    if (current_lba != original_lba) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * No sobrescribir informacion
+     * existente en la region alternativa.
+     */
+    for (uint32_t s = 0;
+         s < BINFS_SECTORS_PER_FILE;
+         s++) {
+
+        if (ata_read_sector(
+                shadow_lba + s,
+                sector
+            ) != 0) {
+            irq_restore(flags);
+            return -1;
+        }
+
+        for (uint32_t j = 0;
+             j < BINFS_SECTOR_SIZE;
+             j++) {
+
+            if (sector[j] != 0U) {
+                irq_restore(flags);
+                return -1;
+            }
+        }
+    }
+
+    /*
+     * Escribir primero el contenido nuevo
+     * en los sectores alternativos.
+     */
+    for (uint32_t s = 0;
+         s < BINFS_SECTORS_PER_FILE;
+         s++) {
+
+        uint32_t offset =
+            s * BINFS_SECTOR_SIZE;
+
+        for (uint32_t j = 0;
+             j < BINFS_SECTOR_SIZE;
+             j++) {
+
+            uint32_t pos = offset + j;
+
+            sector[j] =
+                pos < size
+                    ? replace_buffer[pos]
+                    : 0U;
+        }
+
+        if (ata_write_sector(
+                shadow_lba + s,
+                sector
+            ) != 0) {
+
+            irq_restore(flags);
+            return -1;
+        }
+    }
+
+    /*
+     * Verificar todos los sectores
+     * antes de publicar la actualizacion.
+     */
+    for (uint32_t s = 0;
+         s < BINFS_SECTORS_PER_FILE;
+         s++) {
+
+        if (ata_read_sector(
+                shadow_lba + s,
+                sector
+            ) != 0) {
+            irq_restore(flags);
+            return -1;
+        }
+
+        uint32_t offset =
+            s * BINFS_SECTOR_SIZE;
+
+        for (uint32_t j = 0;
+             j < BINFS_SECTOR_SIZE;
+             j++) {
+
+            uint32_t pos = offset + j;
+
+            uint8_t expected =
+                pos < size
+                    ? replace_buffer[pos]
+                    : 0U;
+
+            if (sector[j] != expected) {
+                irq_restore(flags);
+                return -1;
+            }
+        }
+    }
+
+    /* Conservar el catalogo anterior */
+    uint8_t backup[BINFS_SECTOR_SIZE];
+
+    for (uint32_t i = 0;
+         i < BINFS_SECTOR_SIZE;
+         i++) {
+        backup[i] = catalog[i];
+    }
+
+    uint32_t hash = checksum32(
+        replace_buffer,
+        size
+    );
+
+    /*
+     * Actualizar solo los metadatos
+     * del destino, no su nombre.
+     */
+    for (uint32_t i = 0; i < 4U; i++) {
+        catalog[entry_offset + 32U + i] =
+            (uint8_t)(shadow_lba >> (i * 8U));
+
+        catalog[entry_offset + 36U + i] =
+            (uint8_t)(size >> (i * 8U));
+
+        catalog[entry_offset + 40U + i] =
+            (uint8_t)(hash >> (i * 8U));
+    }
+
+    /*
+     * Publicar al final, cuando todos
+     * los datos nuevos ya estan verificados.
+     */
+    if (ata_write_sector(
+            BINFS_CATALOG_LBA,
+            catalog
+        ) != 0) {
+
+        ata_write_sector(
+            BINFS_CATALOG_LBA,
+            backup
+        );
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Comprobar que el catalogo
+     * quedo escrito como esperamos.
+     */
+    if (ata_read_sector(
+            BINFS_CATALOG_LBA,
+            sector
+        ) != 0) {
+
+        ata_write_sector(
+            BINFS_CATALOG_LBA,
+            backup
+        );
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    for (uint32_t i = 0;
+         i < BINFS_SECTOR_SIZE;
+         i++) {
+
+        if (sector[i] != catalog[i]) {
+            ata_write_sector(
+                BINFS_CATALOG_LBA,
+                backup
+            );
+
+            irq_restore(flags);
+            return -1;
+        }
+    }
+
+    irq_restore(flags);
+    return 0;
+}

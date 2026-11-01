@@ -84,5 +84,18 @@ int binfs_rename_file(
  * -1 = error
  */
 int binfs_remove_file(const char *filename);
-
+/*
+ * Sustituir el contenido de un archivo
+ * existente por el de otro archivo BINFS.
+ *
+ * Conserva el nombre del destino.
+ * Requiere una region alternativa vacia.
+ *
+ * 0 = exito
+ * -1 = error
+ */
+int binfs_replace_file(
+    const char *source,
+    const char *destination
+);
 #endif

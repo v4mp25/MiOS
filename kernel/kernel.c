@@ -995,6 +995,7 @@ else if (iguales(linea, "help")) {
     imprimir("binrename anterior.elf nuevo.elf\n");
     imprimir("binrm archivo.elf\n");
     imprimir("binverify\n");
+    imprimir("binreplace origen.elf destino.elf\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4765,6 +4766,62 @@ else if (iguales(linea, "binverify")) {
         imprimir("BIN VERIFY: OK\n");
     } else {
         imprimir("BIN VERIFY: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "binreplace")) {
+
+    /* Sintaxis: binreplace origen destino */
+    char *source = args;
+
+    while (*source == ' ')
+        source++;
+
+    char *destination = source;
+
+    while (*destination != '\0' &&
+           *destination != ' ') {
+        destination++;
+    }
+
+    if (*destination == ' ') {
+        *destination = '\0';
+        destination++;
+
+        while (*destination == ' ')
+            destination++;
+    }
+
+    int valid =
+        (*source != '\0' &&
+         *destination != '\0');
+
+    for (char *p = destination; *p; p++) {
+        if (*p == ' ' || *p == '\t') {
+            valid = 0;
+            break;
+        }
+    }
+
+    if (!valid) {
+        imprimir("Uso: binreplace origen.elf destino.elf\n");
+
+    } else {
+        imprimir("Actualizando: ");
+        imprimir(destination);
+        imprimir("\n");
+
+        if (binfs_replace_file(
+                source,
+                destination
+            ) == 0) {
+
+            imprimir("Datos actualizados: OK\n");
+            imprimir("BIN REPLACE: OK\n");
+
+        } else {
+            imprimir("BIN REPLACE: ERROR\n");
+        }
     }
 }
 
