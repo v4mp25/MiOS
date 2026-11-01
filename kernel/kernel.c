@@ -23,6 +23,7 @@
 #include "elf_disk.h"
 #include "binfs.h"
 #include "elf_exec.h"
+#include "binfs.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -988,6 +989,7 @@ else if (iguales(linea, "help")) {
     imprimir("binfstest\n");
     imprimir("run archivo.elf\n");
     imprimir("syswritestats\n");
+    imprimir("binls\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4518,6 +4520,53 @@ else if (iguales(linea, "syswritestats")) {
     imprimir("Solicitudes rechazadas: ");
     imprimir_hex32(rejected);
     imprimir("\n");
+}
+
+else if (iguales(linea, "binls")) {
+    imprimir("=== PROGRAMAS BINFS ===\n");
+
+    int count = binfs_count();
+
+    if (count < 0) {
+        imprimir("ERROR: catalogo BINFS invalido.\n");
+    } else {
+        int ok = 1;
+
+        for (int i = 0; i < count; i++) {
+            BinfsEntry entry;
+
+            if (binfs_get_entry(
+                    (uint32_t)i,
+                    &entry
+                ) != 0) {
+                imprimir("ERROR: leyendo entrada.\n");
+                ok = 0;
+                break;
+            }
+
+            imprimir("Nombre: ");
+            imprimir(entry.name);
+            imprimir("\n");
+
+            imprimir("Tamano (hex): ");
+            imprimir_hex32(entry.size);
+            imprimir("\n");
+
+            imprimir("LBA inicial: ");
+            imprimir_hex32(entry.lba);
+            imprimir("\n");
+
+            imprimir("------------------------\n");
+        }
+
+        if (ok) {
+            imprimir("Total de archivos (hex): ");
+            imprimir_hex32((uint32_t)count);
+            imprimir("\n");
+
+            imprimir("BINLS: OK\n");
+        }
+    }
 }
 
     else {

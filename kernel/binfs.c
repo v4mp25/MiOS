@@ -198,3 +198,133 @@ int binfs_read(
     irq_restore(flags);
     return -1;
 }
+
+/*
+ * Validar y copiar una entrada del
+ * catalogo BINFS experimental.
+ */
+static int binfs_decode_entry(
+    uint32_t index,
+    BinfsEntry *result
+) {
+    if (result == 0 ||
+        index >= BINFS_MAX_FILES) {
+        return -1;
+    }
+
+    uint32_t offset =
+        BINFS_FIRST_ENTRY +
+        index * BINFS_ENTRY_SIZE;
+
+    const uint8_t *entry = &catalog[offset];
+
+    /* Exigir terminacion NUL del nombre */
+    int terminated = 0;
+
+    for (uint32_t i = 0; i < 32U; i++) {
+        if (entry[i] == 0U) {
+            terminated = 1;
+            break;
+        }
+    }
+
+    if (!terminated || entry[0] == 0U)
+        return -1;
+
+    uint32_t lba = read_u32(entry + 32U);
+    uint32_t size = read_u32(entry + 36U);
+
+    uint32_t permitted_lba =
+        BINFS_DATA_LBA +
+        index * BINFS_SECTORS_PER_FILE;
+
+    if (lba != permitted_lba ||
+        size == 0U ||
+        size > BINFS_MAX_FILE_SIZE) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < 32U; i++) {
+        result->name[i] = (char)entry[i];
+    }
+
+    result->name[31] = '\0';
+    result->size = size;
+    result->lba = lba;
+
+    return 0;
+}
+
+/*
+ * Leer y comprobar la cabecera
+ * del catalogo BINFS.
+ */
+static int binfs_load_catalog(void) {
+    if (ata_read_sector(
+            BINFS_CATALOG_LBA,
+            catalog
+        ) != 0) {
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < 8U; i++) {
+        if (catalog[i] != magic[i])
+            return -1;
+    }
+
+    uint32_t count = read_u32(&catalog[8]);
+
+    if (count == 0U ||
+        count > BINFS_MAX_FILES) {
+        return -1;
+    }
+
+    return (int)count;
+}
+
+int binfs_count(void) {
+    uint32_t flags = irq_save();
+
+    int count = binfs_load_catalog();
+
+    if (count > 0) {
+        for (int i = 0; i < count; i++) {
+            BinfsEntry entry;
+
+            if (binfs_decode_entry(
+                    (uint32_t)i,
+                    &entry
+                ) != 0) {
+                count = -1;
+                break;
+            }
+        }
+    }
+
+    irq_restore(flags);
+    return count;
+}
+
+int binfs_get_entry(
+    uint32_t index,
+    BinfsEntry *result
+) {
+    if (result == 0)
+        return -1;
+
+    uint32_t flags = irq_save();
+
+    int count = binfs_load_catalog();
+
+    if (count < 0 ||
+        index >= (uint32_t)count) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    int status =
+        binfs_decode_entry(index, result);
+
+    irq_restore(flags);
+    return status;
+}
