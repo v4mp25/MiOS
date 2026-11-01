@@ -288,6 +288,7 @@ static int binfs_load_catalog(void) {
 }
 
 
+
 int binfs_count(void) {
     uint32_t flags = irq_save();
 
@@ -328,6 +329,8 @@ int binfs_count(void) {
     irq_restore(flags);
     return active;
 }
+
+
 
 
 
@@ -842,6 +845,24 @@ int binfs_rename_file(
  * representar posiciones habilitadas,
  * que pueden contener tombstones.
  */
+
+/*
+ * Eliminar logicamente cualquier archivo
+ * BINFS, sin desplazar sus datos.
+ *
+ * El contador del catalogo pasa a
+ * representar posiciones habilitadas,
+ * que pueden contener tombstones.
+ */
+
+/*
+ * Eliminar logicamente cualquier archivo
+ * BINFS, sin desplazar sus datos.
+ *
+ * El contador del catalogo pasa a
+ * representar posiciones habilitadas,
+ * que pueden contener tombstones.
+ */
 int binfs_remove_file(const char *filename) {
     if (filename == 0)
         return -1;
@@ -980,3 +1001,4 @@ int binfs_remove_file(const char *filename) {
     irq_restore(flags);
     return 0;
 }
+
