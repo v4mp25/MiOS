@@ -73,4 +73,15 @@ int binfs_rename_file(
     const char *new_name
 );
 
+/*
+ * Eliminar logicamente el ultimo archivo
+ * del catalogo BINFS experimental.
+ *
+ * No elimina los bytes fisicos.
+ *
+ * 0 = exito
+ * -1 = error
+ */
+int binfs_remove_file(const char *filename);
+
 #endif

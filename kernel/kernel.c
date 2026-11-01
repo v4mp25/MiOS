@@ -992,6 +992,7 @@ else if (iguales(linea, "help")) {
     imprimir("binls\n");
     imprimir("bincopy origen.elf destino.elf\n");
     imprimir("binrename anterior.elf nuevo.elf\n");
+    imprimir("binrm archivo.elf\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4695,6 +4696,42 @@ else if (iguales(linea, "binrename")) {
 
         } else {
             imprimir("BIN RENAME: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "binrm")) {
+
+    const char *filename = args;
+
+    while (*filename == ' ') {
+        filename++;
+    }
+
+    int valid = (*filename != '\0');
+
+    /* Rechazar argumentos adicionales */
+    for (const char *p = filename; *p; p++) {
+        if (*p == ' ' || *p == '\t') {
+            valid = 0;
+            break;
+        }
+    }
+
+    if (!valid) {
+        imprimir("Uso: binrm archivo.elf\n");
+
+    } else {
+        imprimir("Eliminando: ");
+        imprimir(filename);
+        imprimir("\n");
+
+        if (binfs_remove_file(filename) == 0) {
+            imprimir("Archivo retirado del catalogo: OK\n");
+            imprimir("BIN RM: OK\n");
+        } else {
+            imprimir("BIN RM: ERROR\n");
+            imprimir("Solo se elimina el ultimo archivo.\n");
         }
     }
 }
