@@ -1,21 +1,36 @@
 
 /*
- * Primer programa de usuario
- * escrito en C para MiOS.
+ * MiOS - Primer programa C con SYS_WRITE
  *
- * No utiliza Linux ni libc.
+ * Se ejecuta en Ring 3.
+ * No necesita Linux ni libc.
  */
 
 #include <stdint.h>
 
-#define SYS_TEST 1U
-#define SYS_EXIT 2U
+#define SYS_TEST  1U
+#define SYS_EXIT  2U
+#define SYS_WRITE 3U
 
-static void syscall_mios(uint32_t numero) {
+static void mios_syscall(uint32_t number) {
     __asm__ volatile (
         "int $0x80"
         :
-        : "a"(numero)
+        : "a"(number)
+        : "memory", "cc"
+    );
+}
+
+static void mios_write(
+    const char *text,
+    uint32_t length
+) {
+    __asm__ volatile (
+        "int $0x80"
+        :
+        : "a"(SYS_WRITE),
+          "c"(text),
+          "d"(length)
         : "memory", "cc"
     );
 }
@@ -23,26 +38,22 @@ static void syscall_mios(uint32_t numero) {
 __attribute__((noreturn))
 void _start(void) {
 
-    /* Primera llamada al kernel */
-    syscall_mios(SYS_TEST);
+    static const char message[] =
+        "Hola desde un programa C en Ring 3!\n";
 
-    /*
-     * Trabajo sencillo en Ring 3.
-     * volatile evita eliminar el bucle.
-     */
-    volatile uint32_t contador = 0;
+    /* Probar la comunicacion con el kernel */
+    mios_syscall(SYS_TEST);
 
-    for (uint32_t i = 0; i < 1000000U; i++) {
-        contador++;
-    }
+    /* Imprimir desde el propio programa */
+    mios_write(
+        message,
+        sizeof(message) - 1U
+    );
 
-    /* Solicitar la finalizacion */
-    syscall_mios(SYS_EXIT);
+    /* Terminar el programa */
+    mios_syscall(SYS_EXIT);
 
-    /*
-     * SYS_EXIT no deberia regresar
-     * en nuestro ejecutor actual.
-     */
+    /* SYS_EXIT no debe regresar */
     __asm__ volatile ("ud2");
 
     __builtin_unreachable();

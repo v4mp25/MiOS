@@ -5,6 +5,9 @@
 #include "user_tasks.h"
 #include "user_scheduler.h"
 #include "user_process.h"
+#include "user_copy.h"
+/* Funcion implementada en kernel.c */
+extern void syscall_console_putc(char c);
 /*
  * MiOS - Servicios del kernel
  *
@@ -54,7 +57,12 @@ int syscall_audit_get(
 
 
 
-void syscall_dispatch(uint32_t number) {
+void syscall_dispatch(
+    uint32_t number,
+    uint32_t user_pointer,
+    uint32_t length,
+    uint32_t saved_cs
+){
     uint32_t flags = irq_save();
 
     /*
@@ -94,6 +102,44 @@ void syscall_dispatch(uint32_t number) {
              * de finalizar la tarea.
              */
             exit_count++;
+            break;
+
+        case MIOS_SYS_WRITE:
+            /*
+             * Solo aceptar llamadas provenientes
+             * del codigo Ring 3.
+             */
+            if ((saved_cs & 3U) != 3U) {
+                break;
+            }
+
+            /*
+             * Comprobar el puntero, la longitud
+             * y los permisos USER antes de leer.
+             */
+            if (user_memory_readable(
+                    user_pointer,
+                    length
+                ) != 0) {
+                break;
+            }
+
+            /*
+             * El kernel puede acceder al rango
+             * validado del proceso activo.
+             */
+            const uint8_t *text =
+                (const uint8_t *)(uintptr_t)
+                user_pointer;
+
+            for (uint32_t i = 0;
+                 i < length;
+                 i++) {
+                syscall_console_putc(
+                    (char)text[i]
+                );
+            }
+
             break;
 
         default:

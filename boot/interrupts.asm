@@ -38,10 +38,30 @@ syscall_stub:
     add esp, 4
 
     ; EAX original: numero de syscall
-    mov eax, [esp + 28]
-    push eax
+   
+    ; Marco actual tras guardar:
+    ; PUSHAD y los cuatro segmentos.
+    ;
+    ; +28 = EAX original
+    ; +24 = ECX original
+    ; +20 = EDX original
+    ; +52 = CS anterior
+
+    ; Cuarto parametro: CS original
+    push dword [esp + 52]
+
+    ; Tercer parametro: longitud, EDX
+    push dword [esp + 24]
+
+    ; Segundo parametro: puntero, ECX
+    push dword [esp + 32]
+
+    ; Primer parametro: numero, EAX
+    push dword [esp + 40]
+
     call syscall_dispatch
-    add esp, 4
+    add esp, 16
+
 
     ; ¿La llamada fue SYS_EXIT (2)?
     cmp dword [esp + 28], 2

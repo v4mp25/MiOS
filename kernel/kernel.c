@@ -894,6 +894,21 @@ static uint8_t elf_test_kernel_stack[16384]
 static uint8_t elf_disk_run_kernel_stack[16384]
     __attribute__((aligned(16)));
     static uint8_t binfs_test_buffer[BINFS_MAX_FILE_SIZE];
+    
+/*
+ * Salida del kernel para SYS_WRITE.
+ * Recibe un caracter que ya fue
+ * validado como dato de usuario.
+ */
+void syscall_console_putc(char c) {
+    char text[2];
+
+    text[0] = c;
+    text[1] = '\0';
+
+    imprimir(text);
+}
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
