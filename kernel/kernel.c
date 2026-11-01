@@ -27,6 +27,8 @@
 #include "binfs_verify.h"
 #include "binfs_mirror.h"
 #include "binfs_consistency.h"
+#include "miosfs2_bitmap.h"
+#include "miosfs2.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -1007,6 +1009,8 @@ else if (iguales(linea, "help")) {
     imprimir("binconsistency\n");
     imprimir("binrecoverycheck\n");
     imprimir("binrecoverselect\n");
+    imprimir("fs2bitmaptest\n");
+    imprimir("fs2test\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5184,6 +5188,37 @@ else if (iguales(linea, "binrecoverselect")) {
 
             imprimir("BIN RECOVER SELECT: OK\n");
         }
+    }
+}
+
+else if (iguales(linea, "fs2test")) {
+    imprimir("=== MIOSFS02 - FORMATO ===\n");
+
+    if (miosfs2_selftest() == 0) {
+        imprimir("Superbloque de 64 bytes: OK\n");
+        imprimir("Nodo de 64 bytes: OK\n");
+        imprimir("Checksum y estructura: OK\n");
+        imprimir("Validacion de regiones: OK\n");
+        imprimir("FS2 TEST: OK\n");
+    } else {
+        imprimir("FS2 TEST: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "fs2bitmaptest")) {
+    imprimir("=== MIOSFS02 - BLOQUES ===\n");
+
+    if (miosfs2_bitmap_selftest() == 0) {
+        imprimir("Bitmap inicializado: OK\n");
+        imprimir("Reserva de bloques: OK\n");
+        imprimir("Bloques independientes: OK\n");
+        imprimir("Liberacion: OK\n");
+        imprimir("Doble liberacion rechazada: OK\n");
+        imprimir("Reutilizacion: OK\n");
+        imprimir("Limites de bloques: OK\n");
+        imprimir("FS2 BITMAP TEST: OK\n");
+    } else {
+        imprimir("FS2 BITMAP TEST: ERROR\n");
     }
 }
 
