@@ -1,0 +1,13 @@
+# Objetos compilados
+*.o
+kernel.bin
+iso/boot/kernel.bin
+*.iso
+
+# Discos de prueba y respaldos
+*.img
+
+# Archivos temporales
+*.log
+*.tmp
+__pycache__/

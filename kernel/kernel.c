@@ -29,6 +29,7 @@
 #include "binfs_consistency.h"
 #include "miosfs2_bitmap.h"
 #include "miosfs2.h"
+#include "miosfs2_disk.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -1011,6 +1012,10 @@ else if (iguales(linea, "help")) {
     imprimir("binrecoverselect\n");
     imprimir("fs2bitmaptest\n");
     imprimir("fs2test\n");
+    imprimir("fs2diskcheck\n");
+imprimir("fs2block0\n");
+imprimir("fs2reserve0\n");
+imprimir("fs2free0\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5219,6 +5224,47 @@ else if (iguales(linea, "fs2bitmaptest")) {
         imprimir("FS2 BITMAP TEST: OK\n");
     } else {
         imprimir("FS2 BITMAP TEST: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "fs2diskcheck")) {
+    imprimir("=== MIOSFS02 - DISCO ===\n");
+
+    if (miosfs2_disk_check() == 0) {
+        imprimir("Superbloque: OK\n");
+        imprimir("Distribucion: OK\n");
+        imprimir("Bitmap en ATA: OK\n");
+        imprimir("FS2 DISK CHECK: OK\n");
+    } else {
+        imprimir("FS2 DISK CHECK: ERROR\n");
+        imprimir("Disco no compatible.\n");
+    }
+}
+else if (iguales(linea, "fs2block0")) {
+    int used = -1;
+
+    if (miosfs2_disk_block0(&used) != 0) {
+        imprimir("FS2 BLOCK0: ERROR\n");
+    } else if (used) {
+        imprimir("Bloque 0: OCUPADO\n");
+    } else {
+        imprimir("Bloque 0: LIBRE\n");
+    }
+}
+else if (iguales(linea, "fs2reserve0")) {
+    if (miosfs2_disk_set_block0(1) == 0) {
+        imprimir("Bloque 0 reservado en disco.\n");
+        imprimir("FS2 RESERVE0: OK\n");
+    } else {
+        imprimir("FS2 RESERVE0: ERROR\n");
+    }
+}
+else if (iguales(linea, "fs2free0")) {
+    if (miosfs2_disk_set_block0(0) == 0) {
+        imprimir("Bloque 0 liberado en disco.\n");
+        imprimir("FS2 FREE0: OK\n");
+    } else {
+        imprimir("FS2 FREE0: ERROR\n");
     }
 }
 
