@@ -59,4 +59,18 @@ int binfs_copy_file(
     const char *source,
     const char *destination
 );
+
+/*
+ * Cambiar el nombre de un archivo BINFS.
+ *
+ * No cambia su tamaño, LBA ni checksum.
+ *
+ * 0 = exito
+ * -1 = error
+ */
+int binfs_rename_file(
+    const char *old_name,
+    const char *new_name
+);
+
 #endif

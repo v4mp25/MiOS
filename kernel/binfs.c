@@ -628,3 +628,159 @@ int binfs_copy_file(
     irq_restore(flags);
     return 0;
 }
+
+int binfs_rename_file(
+    const char *old_name,
+    const char *new_name
+) {
+    if (old_name == 0 || new_name == 0)
+        return -1;
+
+    /* Validar nombres sin leer mas de 32 bytes */
+    uint32_t old_len = 0;
+    uint32_t new_len = 0;
+
+    while (old_len < 32U &&
+           old_name[old_len] != '\0') {
+        old_len++;
+    }
+
+    if (old_len == 0U || old_len >= 32U)
+        return -1;
+
+    while (new_len < 32U &&
+           new_name[new_len] != '\0') {
+
+        uint8_t c = (uint8_t)new_name[new_len];
+
+        if (c < 33U || c > 126U ||
+            c == '/' || c == '\\') {
+            return -1;
+        }
+
+        new_len++;
+    }
+
+    if (new_len == 0U || new_len >= 32U)
+        return -1;
+
+    uint32_t flags = irq_save();
+
+    /* Leer el catalogo actual */
+    int count = binfs_load_catalog();
+
+    if (count < 1) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    int source_index = -1;
+
+    /* Localizar origen y evitar duplicados */
+    for (int i = 0; i < count; i++) {
+        uint32_t offset =
+            BINFS_FIRST_ENTRY +
+            (uint32_t)i * BINFS_ENTRY_SIZE;
+
+        if (names_equal(
+                new_name,
+                &catalog[offset]
+            )) {
+            irq_restore(flags);
+            return -1;
+        }
+
+        if (names_equal(
+                old_name,
+                &catalog[offset]
+            )) {
+            source_index = i;
+        }
+    }
+
+    if (source_index < 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    uint32_t entry_offset =
+        BINFS_FIRST_ENTRY +
+        (uint32_t)source_index * BINFS_ENTRY_SIZE;
+
+    /* Validar metadatos antes de modificarlos */
+    BinfsEntry original_entry;
+
+    if (binfs_decode_entry(
+            (uint32_t)source_index,
+            &original_entry
+        ) != 0) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Guardar una copia del sector
+     * original para intentar restaurarlo
+     * si falla la escritura.
+     */
+    uint8_t backup[BINFS_SECTOR_SIZE];
+
+    for (uint32_t i = 0;
+         i < BINFS_SECTOR_SIZE;
+         i++) {
+
+        backup[i] = catalog[i];
+    }
+
+    /* Modificar solo los 32 bytes del nombre */
+    for (uint32_t i = 0; i < 32U; i++) {
+        catalog[entry_offset + i] = 0;
+    }
+
+    for (uint32_t i = 0; i < new_len; i++) {
+        catalog[entry_offset + i] =
+            (uint8_t)new_name[i];
+    }
+
+    /* Publicar el nuevo catalogo */
+    if (ata_write_sector(
+            BINFS_CATALOG_LBA,
+            catalog
+        ) != 0) {
+
+        /* Recuperacion de mejor esfuerzo */
+        ata_write_sector(BINFS_CATALOG_LBA, backup);
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Volver a leer y comprobar el resultado */
+    if (binfs_load_catalog() != count) {
+        ata_write_sector(BINFS_CATALOG_LBA, backup);
+        irq_restore(flags);
+        return -1;
+    }
+
+    BinfsEntry updated;
+
+    if (binfs_decode_entry(
+            (uint32_t)source_index,
+            &updated
+        ) != 0 ||
+        !names_equal(
+            new_name,
+            (const uint8_t *)updated.name
+        ) ||
+        updated.size != original_entry.size ||
+        updated.lba != original_entry.lba) {
+
+        ata_write_sector(BINFS_CATALOG_LBA, backup);
+        irq_restore(flags);
+        return -1;
+    }
+
+    irq_restore(flags);
+    return 0;
+}

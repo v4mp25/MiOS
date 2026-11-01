@@ -991,6 +991,7 @@ else if (iguales(linea, "help")) {
     imprimir("syswritestats\n");
     imprimir("binls\n");
     imprimir("bincopy origen.elf destino.elf\n");
+    imprimir("binrename anterior.elf nuevo.elf\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4632,6 +4633,68 @@ else if (iguales(linea, "bincopy")) {
 
         } else {
             imprimir("BIN COPY: ERROR\n");
+        }
+    }
+}
+
+else if (iguales(linea, "binrename")) {
+
+    /* Sintaxis: binrename anterior nuevo */
+    char *old_name = args;
+
+    while (*old_name == ' ')
+        old_name++;
+
+    char *new_name = old_name;
+
+    while (*new_name != '\0' &&
+           *new_name != ' ') {
+        new_name++;
+    }
+
+    if (*new_name == ' ') {
+        *new_name = '\0';
+        new_name++;
+
+        while (*new_name == ' ')
+            new_name++;
+    }
+
+    int valid = 1;
+
+    if (*old_name == '\0' ||
+        *new_name == '\0') {
+        valid = 0;
+    }
+
+    /* Rechazar argumentos adicionales */
+    for (char *p = new_name; *p; p++) {
+        if (*p == ' ') {
+            valid = 0;
+            break;
+        }
+    }
+
+    if (!valid) {
+        imprimir("Uso: binrename anterior.elf nuevo.elf\n");
+
+    } else {
+        imprimir("Renombrando: ");
+        imprimir(old_name);
+        imprimir(" -> ");
+        imprimir(new_name);
+        imprimir("\n");
+
+        if (binfs_rename_file(
+                old_name,
+                new_name
+            ) == 0) {
+
+            imprimir("Archivo renombrado: OK\n");
+            imprimir("BIN RENAME: OK\n");
+
+        } else {
+            imprimir("BIN RENAME: ERROR\n");
         }
     }
 }
