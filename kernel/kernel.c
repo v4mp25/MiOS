@@ -25,6 +25,7 @@
 #include "elf_exec.h"
 #include "binfs.h"
 #include "binfs_verify.h"
+#include "binfs_mirror.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -996,6 +997,7 @@ else if (iguales(linea, "help")) {
     imprimir("binrm archivo.elf\n");
     imprimir("binverify\n");
     imprimir("binreplace origen.elf destino.elf\n");
+    imprimir("binmirrorcheck\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4825,6 +4827,24 @@ else if (iguales(linea, "binreplace")) {
     }
 }
 
+
+else if (iguales(linea, "binmirrorcheck")) {
+
+    imprimir("=== CATALOGO BINFS A/B ===\n");
+
+    if (binfs_mirror_verify() == 0) {
+
+        imprimir("Catalogo LBA 512: OK\n");
+        imprimir("Catalogo LBA 600: OK\n");
+        imprimir("Comparacion de 512 bytes: OK\n");
+        imprimir("BIN MIRROR CHECK: OK\n");
+
+    } else {
+
+        imprimir("CATALOGO: DIFERENCIAS O ERROR\n");
+        imprimir("BIN MIRROR CHECK: ERROR\n");
+    }
+}
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
