@@ -26,7 +26,7 @@
 #include "binfs.h"
 #include "binfs_verify.h"
 #include "binfs_mirror.h"
-
+#include "binfs_consistency.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -1004,6 +1004,7 @@ else if (iguales(linea, "help")) {
     imprimir("bingencheck\n");
     imprimir("binpublishcheck\n");
     imprimir("binrepair\n");
+    imprimir("binconsistency\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5015,6 +5016,67 @@ else if (iguales(linea, "binrepair")) {
                 imprimir("Generaciones sincronizadas: OK\n");
                 imprimir("BIN REPAIR: OK\n");
             }
+        }
+    }
+}
+
+else if (iguales(linea, "binconsistency")) {
+    imprimir("=== COHERENCIA BINFS A/B ===\n");
+
+    BinfsConsistencyReport report;
+
+    if (binfs_consistency_check(&report) != 0) {
+        imprimir("ERROR: lectura de catalogos.\n");
+    } else {
+        imprimir("Catalogo A: ");
+        imprimir(
+            report.a.catalog_valid
+                ? "VALIDO\n" : "INVALIDO\n"
+        );
+
+        imprimir("Generacion A: ");
+        imprimir_hex32(report.a.generation);
+        imprimir("\n");
+
+        imprimir("Archivos correctos A: ");
+        imprimir_hex32(report.a.files_ok);
+        imprimir("\n");
+
+        imprimir("Archivos danados A: ");
+        imprimir_hex32(report.a.files_damaged);
+        imprimir("\n");
+
+        imprimir("Catalogo B: ");
+        imprimir(
+            report.b.catalog_valid
+                ? "VALIDO\n" : "INVALIDO\n"
+        );
+
+        imprimir("Generacion B: ");
+        imprimir_hex32(report.b.generation);
+        imprimir("\n");
+
+        imprimir("Archivos correctos B: ");
+        imprimir_hex32(report.b.files_ok);
+        imprimir("\n");
+
+        imprimir("Archivos danados B: ");
+        imprimir_hex32(report.b.files_damaged);
+        imprimir("\n");
+
+        imprimir("Catalogo activo LBA: ");
+        imprimir_hex32(report.selected_lba);
+        imprimir("\n");
+
+        if (report.selected_lba != 0U &&
+            report.selected_data_ok) {
+
+            imprimir("Datos activos integros: OK\n");
+            imprimir("BIN CONSISTENCY: OK\n");
+
+        } else {
+            imprimir("Datos activos: NO VERIFICADOS\n");
+            imprimir("BIN CONSISTENCY: ERROR\n");
         }
     }
 }
