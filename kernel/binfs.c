@@ -733,29 +733,36 @@ int binfs_copy_file(
 }
 
 
+
+/*
+ * Renombrar un archivo BINFS v2.
+ *
+ * Publica los cambios mediante el
+ * mecanismo redundante de catalogos A/B.
+ *
+ * No modifica los sectores del archivo.
+ */
 int binfs_rename_file(
     const char *old_name,
     const char *new_name
 ) {
-       /* BINFS v2: escrituras temporalmente suspendidas */
-    if (binfs_writes_paused) {
-        return -1;
-    }
     if (old_name == 0 || new_name == 0)
         return -1;
 
-    /* Validar nombres sin leer mas de 32 bytes */
     uint32_t old_len = 0;
     uint32_t new_len = 0;
 
+    /* Validar nombre anterior */
     while (old_len < 32U &&
            old_name[old_len] != '\0') {
+
         old_len++;
     }
 
     if (old_len == 0U || old_len >= 32U)
         return -1;
 
+    /* Validar nombre nuevo */
     while (new_len < 32U &&
            new_name[new_len] != '\0') {
 
@@ -774,26 +781,66 @@ int binfs_rename_file(
 
     uint32_t flags = irq_save();
 
-    /* Leer el catalogo actual */
-    int count = binfs_load_catalog();
+    /*
+     * Leer la copia valida mas reciente.
+     */
+    int slots = binfs_load_catalog();
 
-    if (count < 1) {
+    if (slots < 1 ||
+        slots > (int)BINFS_MAX_FILES) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * La generacion actual se encuentra
+     * en el byte 480 del catalogo v2.
+     */
+    uint32_t generation =
+        (uint32_t)catalog[480] |
+        ((uint32_t)catalog[481] << 8) |
+        ((uint32_t)catalog[482] << 16) |
+        ((uint32_t)catalog[483] << 24);
+
+    if (generation == 0U ||
+        generation == UINT32_MAX) {
+
         irq_restore(flags);
         return -1;
     }
 
     int source_index = -1;
 
-    /* Localizar origen y evitar duplicados */
-    for (int i = 0; i < count; i++) {
+    /*
+     * Buscar el archivo anterior
+     * y comprobar que el nombre nuevo
+     * no exista.
+     */
+    for (int i = 0; i < slots; i++) {
         uint32_t offset =
             BINFS_FIRST_ENTRY +
             (uint32_t)i * BINFS_ENTRY_SIZE;
+
+        if (catalog[offset] == 0U)
+            continue;
+
+        BinfsEntry entry;
+
+        if (binfs_decode_entry(
+                (uint32_t)i,
+                &entry
+            ) != 0) {
+
+            irq_restore(flags);
+            return -1;
+        }
 
         if (names_equal(
                 new_name,
                 &catalog[offset]
             )) {
+
             irq_restore(flags);
             return -1;
         }
@@ -802,6 +849,7 @@ int binfs_rename_file(
                 old_name,
                 &catalog[offset]
             )) {
+
             source_index = i;
         }
     }
@@ -813,35 +861,16 @@ int binfs_rename_file(
 
     uint32_t entry_offset =
         BINFS_FIRST_ENTRY +
-        (uint32_t)source_index * BINFS_ENTRY_SIZE;
-
-    /* Validar metadatos antes de modificarlos */
-    BinfsEntry original_entry;
-
-    if (binfs_decode_entry(
-            (uint32_t)source_index,
-            &original_entry
-        ) != 0) {
-
-        irq_restore(flags);
-        return -1;
-    }
+        (uint32_t)source_index *
+            BINFS_ENTRY_SIZE;
 
     /*
-     * Guardar una copia del sector
-     * original para intentar restaurarlo
-     * si falla la escritura.
+     * Modificar solamente los bytes
+     * del nombre en nuestra copia RAM.
+     *
+     * El LBA, tamano y checksum
+     * del archivo no se modifican.
      */
-    uint8_t backup[BINFS_SECTOR_SIZE];
-
-    for (uint32_t i = 0;
-         i < BINFS_SECTOR_SIZE;
-         i++) {
-
-        backup[i] = catalog[i];
-    }
-
-    /* Modificar solo los 32 bytes del nombre */
     for (uint32_t i = 0; i < 32U; i++) {
         catalog[entry_offset + i] = 0;
     }
@@ -851,40 +880,49 @@ int binfs_rename_file(
             (uint8_t)new_name[i];
     }
 
-    /* Publicar el nuevo catalogo */
-    if (ata_write_sector(
-            BINFS_CATALOG_LBA,
-            catalog
+    /*
+     * Publicar usando el mecanismo A/B.
+     *
+     * Esta funcion incrementa la
+     * generacion, recalcula el checksum
+     * y escribe el catalogo inactivo.
+     */
+    if (binfs_catalog_publish(
+            catalog,
+            generation
         ) != 0) {
 
-        /* Recuperacion de mejor esfuerzo */
-        ata_write_sector(BINFS_CATALOG_LBA, backup);
-
         irq_restore(flags);
         return -1;
     }
 
-    /* Volver a leer y comprobar el resultado */
-    if (binfs_load_catalog() != count) {
-        ata_write_sector(BINFS_CATALOG_LBA, backup);
+    /*
+     * Volver a leer el catalogo activo
+     * despues de publicar.
+     */
+    int updated_slots = binfs_load_catalog();
+
+    if (updated_slots != slots) {
         irq_restore(flags);
         return -1;
     }
 
-    BinfsEntry updated;
+    BinfsEntry updated_entry;
 
     if (binfs_decode_entry(
             (uint32_t)source_index,
-            &updated
-        ) != 0 ||
-        !names_equal(
-            new_name,
-            (const uint8_t *)updated.name
-        ) ||
-        updated.size != original_entry.size ||
-        updated.lba != original_entry.lba) {
+            &updated_entry
+        ) != 0) {
 
-        ata_write_sector(BINFS_CATALOG_LBA, backup);
+        irq_restore(flags);
+        return -1;
+    }
+
+    if (!names_equal(
+            new_name,
+            (const uint8_t *)updated_entry.name
+        )) {
+
         irq_restore(flags);
         return -1;
     }
@@ -892,6 +930,7 @@ int binfs_rename_file(
     irq_restore(flags);
     return 0;
 }
+
 
 
 /*
