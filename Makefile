@@ -12,7 +12,7 @@ all: os.iso
 boot.o: boot/boot.asm
 	$(ASM) -f elf32 $< -o $@
 
-kernel.o: kernel/kernel.c include/fs.h include/interrupts.h include/memory.h include/thread.h include/process.h include/memory_map.h include/pmm.h include/paging.h include/irq.h include/address_space.h include/gdt.h include/tss.h include/syscall.h include/user_program.h include/ring3.h include/user_context.h include/user_tasks.h include/user_scheduler.h include/user_process.h include/elf32.h include/elf_disk.h include/binfs.h include/elf_exec.h
+kernel.o: kernel/kernel.c include/fs.h include/interrupts.h include/memory.h include/thread.h include/process.h include/memory_map.h include/pmm.h include/paging.h include/irq.h include/address_space.h include/gdt.h include/tss.h include/syscall.h include/user_program.h include/ring3.h include/user_context.h include/user_tasks.h include/user_scheduler.h include/user_process.h include/elf32.h include/elf_disk.h include/binfs.h include/elf_exec.h include/binfs_verify.h
 	$(CC) $(CFLAGS) -c kernel/kernel.c -o kernel.o
 fs.o: fs/fs.c include/fs.h
 	$(CC) $(CFLAGS) -c fs/fs.c -o fs.o
@@ -65,8 +65,8 @@ elf_disk.o: kernel/elf_disk.c include/elf_disk.h include/ata.h include/irq.h
 	$(CC) $(CFLAGS) -c kernel/elf_disk.c -o elf_disk.o
 
 
-kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o elf_exec.o elf_disk.o binfs.o elf_loader.o elf32.o user_process.o user_scheduler.o memory_map.o user_tasks.o ring3.o user_program.o thread.o syscall.o user_copy.o tss.o user_context.o address_space.o pmm.o thread_switch.o gdt.o hola_elf.o gdt_flush.o paging.o process.o kernel/linker.ld
-	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o kernel.o binfs.o elf_exec.o elf_disk.o user_process.o elf_loader.o elf32.o user_scheduler.o user_tasks.o fs.o ring3.o ata.o user_program.o interrupts.o user_copy.o interrupts_c.o syscall.o tss.o memory.o user_context.o gdt.o gdt_flush.o paging.o hola_elf.o memory_map.o address_space.o pmm.o thread.o thread_switch.o process.o
+kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o memory.o binfs_verify.o elf_exec.o elf_disk.o binfs.o elf_loader.o elf32.o user_process.o user_scheduler.o memory_map.o user_tasks.o ring3.o user_program.o thread.o syscall.o user_copy.o tss.o user_context.o address_space.o pmm.o thread_switch.o gdt.o hola_elf.o gdt_flush.o paging.o process.o kernel/linker.ld
+	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o kernel.o binfs.o binfs_verify.o elf_exec.o elf_disk.o user_process.o elf_loader.o elf32.o user_scheduler.o user_tasks.o fs.o ring3.o ata.o user_program.o interrupts.o user_copy.o interrupts_c.o syscall.o tss.o memory.o user_context.o gdt.o gdt_flush.o paging.o hola_elf.o memory_map.o address_space.o pmm.o thread.o thread_switch.o process.o
 
 os.iso: kernel.bin boot/grub/grub.cfg
 	mkdir -p iso/boot/grub
@@ -83,7 +83,7 @@ run: os.iso
 		-boot order=d \
 		-m 128M
 clean:
-	rm -f boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o elf_exec.o user_copy.o user_process.o binfs.o elf_disk.o elf32.o elf_loader.o user_scheduler.o user_context.o user_tasks.o memory.o ring3.o user_program.o gdt.o syscall.o tss.o gdt_flush.o paging.o thread.o address_space.o thread_switch.o process.o kernel.bin os.iso memory_map.o user/hola.o user/hola.elf hola_elf.o
+	rm -f boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o elf_exec.o user_copy.o binfs_verify.o user_process.o binfs.o elf_disk.o elf32.o elf_loader.o user_scheduler.o user_context.o user_tasks.o memory.o ring3.o user_program.o gdt.o syscall.o tss.o gdt_flush.o paging.o thread.o address_space.o thread_switch.o process.o kernel.bin os.iso memory_map.o user/hola.o user/hola.elf hola_elf.o
 	rm -rf iso/boot
 interrupts.o: boot/interrupts.asm
 	$(ASM) -f elf32 boot/interrupts.asm -o interrupts.o
@@ -118,6 +118,10 @@ memory_map.o: kernel/memory_map.c include/memory_map.h
 	$(CC) $(CFLAGS) -c kernel/memory_map.c -o memory_map.o
 thread.o: kernel/thread.c include/thread.h include/memory.h include/irq.h include/paging.h include/tss.h
 	$(CC) $(CFLAGS) -c kernel/thread.c -o thread.o
+
+binfs_verify.o: kernel/binfs_verify.c include/binfs_verify.h include/binfs.h include/elf32.h include/irq.h
+	$(CC) $(CFLAGS) -c kernel/binfs_verify.c -o binfs_verify.o
+
 
 thread_switch.o: boot/thread_switch.asm
 	$(ASM) -f elf32 boot/thread_switch.asm -o thread_switch.o

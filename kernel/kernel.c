@@ -24,6 +24,7 @@
 #include "binfs.h"
 #include "elf_exec.h"
 #include "binfs.h"
+#include "binfs_verify.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -993,6 +994,7 @@ else if (iguales(linea, "help")) {
     imprimir("bincopy origen.elf destino.elf\n");
     imprimir("binrename anterior.elf nuevo.elf\n");
     imprimir("binrm archivo.elf\n");
+    imprimir("binverify\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4733,6 +4735,36 @@ else if (iguales(linea, "binrm")) {
     imprimir("BIN RM: ERROR\n");
     imprimir("Archivo inexistente o catalogo invalido.\n");
 }
+    }
+}
+
+else if (iguales(linea, "binverify")) {
+    imprimir("=== VERIFICACION BINFS ===\n");
+
+    BinfsVerifyResult result;
+
+    int status = binfs_verify_all(&result);
+
+    imprimir("Archivos revisados: ");
+    imprimir_hex32(result.files_checked);
+    imprimir("\n");
+
+    imprimir("ELF validos: ");
+    imprimir_hex32(result.elf_valid);
+    imprimir("\n");
+
+    imprimir("Errores detectados: ");
+    imprimir_hex32(result.errors);
+    imprimir("\n");
+
+    if (status == 0) {
+        imprimir("Lectura BINFS: OK\n");
+        imprimir("Checksums: OK\n");
+        imprimir("Nombres y LBA: OK\n");
+        imprimir("Segmentos ELF32: OK\n");
+        imprimir("BIN VERIFY: OK\n");
+    } else {
+        imprimir("BIN VERIFY: ERROR\n");
     }
 }
 
