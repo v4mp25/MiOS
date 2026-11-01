@@ -52,4 +52,30 @@ int binfs_catalog_read_latest(
     uint8_t *destination
 );
 
+/*
+ * Publicar un nuevo catalogo BINFS v2.
+ *
+ * updated:
+ *   512 bytes con los metadatos nuevos.
+ *
+ * expected_generation:
+ *   generacion que estaba activa
+ *   al preparar updated.
+ *
+ * Escribe solamente la copia inactiva.
+ *
+ * 0 = exito
+ * -1 = error
+ */
+int binfs_catalog_publish(
+    const uint8_t *updated,
+    uint32_t expected_generation
+);
+
+/* Obtener generacion actual y LBA activo */
+int binfs_catalog_current(
+    uint32_t *generation,
+    uint32_t *active_lba
+);
+
 #endif

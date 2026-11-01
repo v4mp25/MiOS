@@ -898,6 +898,8 @@ static uint8_t elf_test_kernel_stack[16384]
 static uint8_t elf_disk_run_kernel_stack[16384]
     __attribute__((aligned(16)));
     static uint8_t binfs_test_buffer[BINFS_MAX_FILE_SIZE];
+    /* Sector temporal para prueba de publicacion */
+static uint8_t binpublish_buffer[512];
     
 /*
  * Salida del kernel para SYS_WRITE.
@@ -1000,6 +1002,7 @@ else if (iguales(linea, "help")) {
     imprimir("binreplace origen.elf destino.elf\n");
     imprimir("binmirrorcheck\n");
     imprimir("bingencheck\n");
+    imprimir("binpublishcheck\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4879,6 +4882,95 @@ else if (iguales(linea, "bingencheck")) {
         imprimir("\n");
 
         imprimir("BIN GENERATION CHECK: OK\n");
+    }
+}
+
+else if (iguales(linea, "binpublishcheck")) {
+    imprimir("=== PUBLICACION CATALOGO A/B ===\n");
+
+    uint32_t before_generation = 0;
+    uint32_t before_lba = 0;
+
+    int ok = 1;
+
+    if (binfs_catalog_current(
+            &before_generation,
+            &before_lba
+        ) != 0) {
+
+        imprimir("ERROR: catalogo activo.\n");
+        ok = 0;
+    }
+
+    /*
+     * Leer los metadatos actuales.
+     * No cambiaremos ninguna entrada.
+     */
+    if (ok &&
+        binfs_catalog_read_latest(
+            binpublish_buffer
+        ) < 0) {
+
+        imprimir("ERROR: leer catalogo.\n");
+        ok = 0;
+    }
+
+    /* Publicar una nueva generacion */
+    if (ok &&
+        binfs_catalog_publish(
+            binpublish_buffer,
+            before_generation
+        ) != 0) {
+
+        imprimir("ERROR: publicacion.\n");
+        ok = 0;
+    }
+
+    uint32_t after_generation = 0;
+    uint32_t after_lba = 0;
+
+    if (ok &&
+        binfs_catalog_current(
+            &after_generation,
+            &after_lba
+        ) != 0) {
+
+        imprimir("ERROR: verificar publicacion.\n");
+        ok = 0;
+    }
+
+    if (ok &&
+        (after_generation !=
+            before_generation + 1U ||
+         after_lba == before_lba)) {
+
+        imprimir("ERROR: generacion o LBA.\n");
+        ok = 0;
+    }
+
+    if (ok) {
+        imprimir("Generacion anterior: ");
+        imprimir_hex32(before_generation);
+        imprimir("\n");
+
+        imprimir("Generacion nueva: ");
+        imprimir_hex32(after_generation);
+        imprimir("\n");
+
+        imprimir("LBA anterior: ");
+        imprimir_hex32(before_lba);
+        imprimir("\n");
+
+        imprimir("LBA nuevo: ");
+        imprimir_hex32(after_lba);
+        imprimir("\n");
+
+        imprimir("Publicacion A/B: OK\n");
+        imprimir("Checksum actualizado: OK\n");
+        imprimir("BIN PUBLISH CHECK: OK\n");
+
+    } else {
+        imprimir("BIN PUBLISH CHECK: ERROR\n");
     }
 }
 

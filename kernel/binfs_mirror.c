@@ -14,6 +14,11 @@
 
 static uint8_t catalog_primary[ATA_SECTOR_SIZE];
 static uint8_t catalog_mirror[ATA_SECTOR_SIZE];
+/* Buffers para publicacion controlada */
+static uint8_t publish_current[ATA_SECTOR_SIZE];
+static uint8_t publish_candidate[ATA_SECTOR_SIZE];
+static uint8_t publish_verify[ATA_SECTOR_SIZE];
+
 
 static const uint8_t expected_magic[8] = {
     'M', 'I', 'O', 'S', 'B', 'I', 'N', '1'
@@ -356,4 +361,211 @@ int binfs_catalog_read_latest(
         return -1;
 
     return (int)slots;
+}
+
+int binfs_catalog_current(
+    uint32_t *generation,
+    uint32_t *active_lba
+) {
+    if (generation == 0 || active_lba == 0)
+        return -1;
+
+    BinfsGenerationStatus status;
+
+    if (binfs_generation_check(&status) != 0)
+        return -1;
+
+    *generation = status.selected_generation;
+    *active_lba = status.selected_lba;
+
+    return 0;
+}
+
+/*
+ * Publicacion A/B del catalogo BINFS v2.
+ *
+ * No altera la copia actualmente activa.
+ * Escribe la version siguiente en la
+ * copia inactiva y verifica la escritura.
+ */
+int binfs_catalog_publish(
+    const uint8_t *updated,
+    uint32_t expected_generation
+) {
+    if (updated == 0)
+        return -1;
+
+    uint32_t flags = irq_save();
+
+    /* Consultar la copia activa */
+    BinfsGenerationStatus status;
+
+    if (binfs_generation_check(&status) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    if (status.selected_generation !=
+        expected_generation) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* No permitir desbordamiento de generacion */
+    if (expected_generation == 0U ||
+        expected_generation == UINT32_MAX) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Recuperar el catalogo vigente */
+    int slots = binfs_catalog_read_latest(
+        publish_current
+    );
+
+    if (slots < 1 || slots > 4) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Verificar que los metadatos base
+     * del candidato procedan de una
+     * version BINFS v2 conocida.
+     */
+    if (valid_catalog_header(updated) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    if (binfs_read_u32(
+            &updated[VERSION_OFFSET]
+        ) != BINFS_FORMAT_VERSION) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    if (binfs_read_u32(
+            &updated[GEN_OFFSET]
+        ) != expected_generation) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Copiar el candidato para poder
+     * actualizar generacion y checksum
+     * sin modificar el buffer del llamador.
+     */
+    for (uint32_t i = 0;
+         i < ATA_SECTOR_SIZE;
+         i++) {
+        publish_candidate[i] = updated[i];
+    }
+
+    uint32_t next_generation =
+        expected_generation + 1U;
+
+    /* Escribir generacion nueva */
+    for (uint32_t i = 0; i < 4U; i++) {
+        publish_candidate[GEN_OFFSET + i] =
+            (uint8_t)(
+                next_generation >> (8U * i)
+            );
+    }
+
+    /* Poner a cero el campo checksum */
+    for (uint32_t i = 0; i < 4U; i++) {
+        publish_candidate[HASH_OFFSET + i] = 0;
+    }
+
+    /* Calcular checksum del catalogo entero */
+    uint32_t hash =
+        binfs_catalog_hash(publish_candidate);
+
+    for (uint32_t i = 0; i < 4U; i++) {
+        publish_candidate[HASH_OFFSET + i] =
+            (uint8_t)(hash >> (8U * i));
+    }
+
+    /* Validar el candidato final */
+    if (!binfs_catalog_valid_v2(
+            publish_candidate
+        )) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Elegir el sector INACTIVO.
+     *
+     * Si A esta activo, escribir B.
+     * Si B esta activo, escribir A.
+     */
+    uint32_t target_lba;
+
+    if (status.selected_lba ==
+        BINFS_PRIMARY_CATALOG_LBA) {
+
+        target_lba =
+            BINFS_MIRROR_CATALOG_LBA;
+
+    } else if (status.selected_lba ==
+               BINFS_MIRROR_CATALOG_LBA) {
+
+        target_lba =
+            BINFS_PRIMARY_CATALOG_LBA;
+
+    } else {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Publicar en la copia inactiva */
+    if (ata_write_sector(
+            target_lba,
+            publish_candidate
+        ) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Leer nuevamente el sector escrito */
+    if (ata_read_sector(
+            target_lba,
+            publish_verify
+        ) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Comparar los 512 bytes */
+    for (uint32_t i = 0;
+         i < ATA_SECTOR_SIZE;
+         i++) {
+
+        if (publish_verify[i] !=
+            publish_candidate[i]) {
+            irq_restore(flags);
+            return -1;
+        }
+    }
+
+    /*
+     * Confirmar que el lector seleccione
+     * la generacion recien publicada.
+     */
+    BinfsGenerationStatus after;
+
+    if (binfs_generation_check(&after) != 0 ||
+        after.selected_lba != target_lba ||
+        after.selected_generation !=
+            next_generation) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    irq_restore(flags);
+    return 0;
 }
