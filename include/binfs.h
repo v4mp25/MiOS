@@ -48,12 +48,13 @@ int binfs_get_entry(
     BinfsEntry *result
 );
 /*
- * Copiar un archivo BINFS a una entrada nueva.
+ * Copiar un archivo BINFS.
  *
- * 0  = correcto
- * -1 = error
+ * Reutiliza primero una posicion
+ * eliminada; si no existe, intenta
+ * crear una nueva.
  *
- * Solo admite un destino que no exista.
+ * No sobrescribe archivos activos.
  */
 int binfs_copy_file(
     const char *source,

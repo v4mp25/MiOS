@@ -385,6 +385,7 @@ int binfs_get_entry(
 }
 
 
+
 int binfs_copy_file(
     const char *source,
     const char *destination
@@ -392,22 +393,16 @@ int binfs_copy_file(
     if (source == 0 || destination == 0)
         return -1;
 
-    /*
-     * Comprobar el nombre destino.
-     * Maximo: 31 caracteres y NUL.
-     * No permitir rutas ni espacios.
-     */
+    /* Validar nombre del destino */
     uint32_t name_length = 0;
 
     while (name_length < 32U &&
            destination[name_length] != '\0') {
 
-        char c = destination[name_length];
+        uint8_t c = (uint8_t)destination[name_length];
 
-        if (c == '/' || c == '\\' ||
-            c == ' ' || c == '\t' ||
-            (uint8_t)c < 33U ||
-            (uint8_t)c > 126U) {
+        if (c < 33U || c > 126U ||
+            c == '/' || c == '\\') {
             return -1;
         }
 
@@ -415,12 +410,13 @@ int binfs_copy_file(
     }
 
     if (name_length == 0U ||
-        name_length >= 32U)
+        name_length >= 32U) {
         return -1;
+    }
 
     /*
-     * Primero leer el archivo origen.
-     * binfs_read verifica su checksum.
+     * Leer origen completo.
+     * BINFS comprueba su checksum.
      */
     uint32_t size = 0;
 
@@ -434,87 +430,144 @@ int binfs_copy_file(
     }
 
     if (size == 0U ||
-        size > BINFS_MAX_FILE_SIZE)
+        size > BINFS_MAX_FILE_SIZE) {
         return -1;
+    }
 
     uint32_t flags = irq_save();
 
-    /*
-     * Volver a leer el catalogo para
-     * trabajar con su estado actual.
-     */
-    int count = binfs_load_catalog();
+    /* Leer el catalogo actualizado */
+    int slots = binfs_load_catalog();
 
-    if (count <= 0 ||
-        count >= (int)BINFS_MAX_FILES) {
+    if (slots < 1 ||
+        slots > (int)BINFS_MAX_FILES) {
         irq_restore(flags);
         return -1;
     }
 
+    int free_slot = -1;
+
     /*
-     * Rechazar nombres repetidos.
+     * Recorrer posiciones ocupadas
+     * y posiciones eliminadas.
      */
-    for (int i = 0; i < count; i++) {
+    for (int i = 0; i < slots; i++) {
         uint32_t offset =
             BINFS_FIRST_ENTRY +
             (uint32_t)i * BINFS_ENTRY_SIZE;
 
+        /* Tombstone: entrada eliminada */
+        if (catalog[offset] == 0U) {
+
+            if (free_slot < 0) {
+                int empty = 1;
+
+                for (uint32_t j = 0;
+                     j < BINFS_ENTRY_SIZE;
+                     j++) {
+
+                    if (catalog[offset + j] != 0U) {
+                        empty = 0;
+                        break;
+                    }
+                }
+
+                if (empty)
+                    free_slot = i;
+            }
+
+            continue;
+        }
+
+        /* Validar cada entrada activa */
+        BinfsEntry existing;
+
+        if (binfs_decode_entry(
+                (uint32_t)i,
+                &existing
+            ) != 0) {
+
+            irq_restore(flags);
+            return -1;
+        }
+
+        /* No permitir nombre repetido */
         if (names_equal(
                 destination,
                 &catalog[offset]
             )) {
+
             irq_restore(flags);
             return -1;
         }
     }
 
     /*
-     * La siguiente posicion del catalogo
-     * sera ocupada por el archivo nuevo.
+     * Preferir un espacio eliminado.
+     * Si no existe, agregar al final.
      */
-    uint32_t index = (uint32_t)count;
+    uint32_t index;
+    int append_new = 0;
+
+    if (free_slot >= 0) {
+        index = (uint32_t)free_slot;
+
+    } else if (slots < (int)BINFS_MAX_FILES) {
+        index = (uint32_t)slots;
+        append_new = 1;
+
+    } else {
+        irq_restore(flags);
+        return -1;
+    }
 
     uint32_t destination_lba =
         BINFS_DATA_LBA +
         index * BINFS_SECTORS_PER_FILE;
 
     /*
-     * No sobrescribir sectores que
-     * ya contengan informacion.
+     * Si es una posicion nueva,
+     * exigir que sus sectores esten vacios.
+     *
+     * Si es un tombstone, permitimos
+     * sobrescribir los bytes del archivo
+     * que fue eliminado logicamente.
      */
-    for (uint32_t s = 0;
-         s < BINFS_SECTORS_PER_FILE;
-         s++) {
+    if (append_new) {
+        for (uint32_t s = 0;
+             s < BINFS_SECTORS_PER_FILE;
+             s++) {
 
-        if (ata_read_sector(
-                destination_lba + s,
-                sector
-            ) != 0) {
-            irq_restore(flags);
-            return -1;
-        }
+            if (ata_read_sector(
+                    destination_lba + s,
+                    sector
+                ) != 0) {
 
-        for (uint32_t j = 0;
-             j < BINFS_SECTOR_SIZE;
-             j++) {
-
-            if (sector[j] != 0U) {
                 irq_restore(flags);
                 return -1;
+            }
+
+            for (uint32_t j = 0;
+                 j < BINFS_SECTOR_SIZE;
+                 j++) {
+
+                if (sector[j] != 0U) {
+                    irq_restore(flags);
+                    return -1;
+                }
             }
         }
     }
 
     /*
-     * Copiar los datos, incluyendo los
-     * ceros que forman parte del ELF.
+     * Escribir los datos en la region
+     * exclusiva de la posicion elegida.
      */
     for (uint32_t s = 0;
          s < BINFS_SECTORS_PER_FILE;
          s++) {
 
-        uint32_t offset =
-            s * BINFS_SECTOR_SIZE;
+        uint32_t offset = s * BINFS_SECTOR_SIZE;
 
         for (uint32_t j = 0;
              j < BINFS_SECTOR_SIZE;
@@ -539,8 +592,8 @@ int binfs_copy_file(
     }
 
     /*
-     * Verificar que cada byte haya sido
-     * escrito correctamente en el disco.
+     * Verificar la escritura completa,
+     * incluyendo el relleno con ceros.
      */
     for (uint32_t s = 0;
          s < BINFS_SECTORS_PER_FILE;
@@ -555,8 +608,7 @@ int binfs_copy_file(
             return -1;
         }
 
-        uint32_t offset =
-            s * BINFS_SECTOR_SIZE;
+        uint32_t offset = s * BINFS_SECTOR_SIZE;
 
         for (uint32_t j = 0;
              j < BINFS_SECTOR_SIZE;
@@ -564,12 +616,12 @@ int binfs_copy_file(
 
             uint32_t position = offset + j;
 
-            uint8_t expected_byte =
+            uint8_t expected =
                 position < size
                     ? copy_buffer[position]
                     : 0U;
 
-            if (sector[j] != expected_byte) {
+            if (sector[j] != expected) {
                 irq_restore(flags);
                 return -1;
             }
@@ -577,10 +629,8 @@ int binfs_copy_file(
     }
 
     /*
-     * Los datos ya estan escritos
-     * y verificados.
-     *
-     * Registrar la nueva entrada.
+     * Datos verificados.
+     * Preparar la entrada de catalogo.
      */
     uint32_t entry_offset =
         BINFS_FIRST_ENTRY +
@@ -589,77 +639,58 @@ int binfs_copy_file(
     for (uint32_t i = 0;
          i < BINFS_ENTRY_SIZE;
          i++) {
-
         catalog[entry_offset + i] = 0;
     }
 
     for (uint32_t i = 0;
          i < name_length;
          i++) {
-
         catalog[entry_offset + i] =
             (uint8_t)destination[i];
     }
 
-    /* LBA inicial */
-    catalog[entry_offset + 32U] =
-        (uint8_t)destination_lba;
-
-    catalog[entry_offset + 33U] =
-        (uint8_t)(destination_lba >> 8);
-
-    catalog[entry_offset + 34U] =
-        (uint8_t)(destination_lba >> 16);
-
-    catalog[entry_offset + 35U] =
-        (uint8_t)(destination_lba >> 24);
-
-    /* Tamaño exacto */
-    catalog[entry_offset + 36U] =
-        (uint8_t)size;
-
-    catalog[entry_offset + 37U] =
-        (uint8_t)(size >> 8);
-
-    catalog[entry_offset + 38U] =
-        (uint8_t)(size >> 16);
-
-    catalog[entry_offset + 39U] =
-        (uint8_t)(size >> 24);
-
-    /* Checksum del contenido */
     uint32_t hash = checksum32(
         copy_buffer,
         size
     );
 
-    catalog[entry_offset + 40U] =
-        (uint8_t)hash;
+    /* LBA del archivo */
+    for (uint32_t i = 0; i < 4U; i++) {
+        catalog[entry_offset + 32U + i] =
+            (uint8_t)(destination_lba >> (i * 8U));
+    }
 
-    catalog[entry_offset + 41U] =
-        (uint8_t)(hash >> 8);
+    /* Tamano exacto */
+    for (uint32_t i = 0; i < 4U; i++) {
+        catalog[entry_offset + 36U + i] =
+            (uint8_t)(size >> (i * 8U));
+    }
 
-    catalog[entry_offset + 42U] =
-        (uint8_t)(hash >> 16);
-
-    catalog[entry_offset + 43U] =
-        (uint8_t)(hash >> 24);
+    /* Checksum FNV-1a */
+    for (uint32_t i = 0; i < 4U; i++) {
+        catalog[entry_offset + 40U + i] =
+            (uint8_t)(hash >> (i * 8U));
+    }
 
     /*
-     * Actualizar el numero de archivos.
-     * El resto de los bytes 8-11 se
-     * conserva en cero.
+     * Si usamos un tombstone,
+     * conservar el numero de slots.
+     *
+     * Si agregamos una posicion nueva,
+     * aumentar ese numero.
      */
-    uint32_t new_count = index + 1U;
+    uint32_t new_slots =
+        append_new ? index + 1U : (uint32_t)slots;
 
-    catalog[8] = (uint8_t)new_count;
-    catalog[9] = 0;
-    catalog[10] = 0;
-    catalog[11] = 0;
+    for (uint32_t i = 0; i < 4U; i++) {
+        catalog[8U + i] =
+            (uint8_t)(new_slots >> (i * 8U));
+    }
 
     /*
-     * Publicar el catalogo al final,
-     * despues de verificar los datos.
+     * Publicar el catalogo al final.
+     * Antes de esto el archivo nuevo
+     * todavia no es visible en BINFS.
      */
     if (ata_write_sector(
             BINFS_CATALOG_LBA,
@@ -670,15 +701,37 @@ int binfs_copy_file(
         return -1;
     }
 
-    /* Verificar lectura del catalogo */
-    if (binfs_load_catalog() != (int)new_count) {
+    /*
+     * Comprobar que el catalogo quedo
+     * grabado exactamente.
+     */
+    if (ata_read_sector(
+            BINFS_CATALOG_LBA,
+            sector
+        ) != 0) {
+
         irq_restore(flags);
         return -1;
+    }
+
+    /*
+     * sector contiene 512 bytes.
+     * catalog tambien.
+     */
+    for (uint32_t i = 0;
+         i < BINFS_SECTOR_SIZE;
+         i++) {
+
+        if (sector[i] != catalog[i]) {
+            irq_restore(flags);
+            return -1;
+        }
     }
 
     irq_restore(flags);
     return 0;
 }
+
 
 int binfs_rename_file(
     const char *old_name,
