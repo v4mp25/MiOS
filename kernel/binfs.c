@@ -4,7 +4,8 @@
 #include "binfs.h"
 #include "ata.h"
 #include "irq.h"
-
+#include "binfs_mirror.h"
+static int binfs_load_catalog(void);
 #define BINFS_CATALOG_LBA 512U
 #define BINFS_DATA_LBA 513U
 
@@ -21,15 +22,14 @@ static uint8_t catalog[BINFS_SECTOR_SIZE];
 static uint8_t sector[BINFS_SECTOR_SIZE];
 /* Buffer exclusivo para actualizaciones */
 static uint8_t replace_buffer[BINFS_MAX_FILE_SIZE];
+static volatile int binfs_writes_paused = 1;
 /*
  * Buffer de 8192 bytes para copiar
  * un archivo completo dentro de BINFS.
  */
 static uint8_t copy_buffer[BINFS_MAX_FILE_SIZE];
 
-static const uint8_t magic[8] = {
-    'M', 'I', 'O', 'S', 'B', 'I', 'N', '1'
-};
+
 
 static uint32_t read_u32(const uint8_t *p) {
     return (uint32_t)p[0] |
@@ -95,31 +95,25 @@ int binfs_read(
 
     uint32_t flags = irq_save();
 
-    if (ata_read_sector(
-            BINFS_CATALOG_LBA,
-            catalog
-        ) != 0) {
-        irq_restore(flags);
-        return -1;
-    }
+   
+/*
+ * Seleccionar el catalogo valido
+ * mas reciente antes de buscar
+ * el nombre del archivo.
+ */
+int count = binfs_load_catalog();
 
-    for (uint32_t i = 0; i < 8U; i++) {
-        if (catalog[i] != magic[i]) {
-            irq_restore(flags);
-            return -1;
-        }
-    }
+if (count < 1 ||
+    count > (int)BINFS_MAX_FILES) {
 
-    uint32_t count = read_u32(&catalog[8]);
+    irq_restore(flags);
+    return -1;
+}
 
-    if (count == 0U || count > BINFS_MAX_FILES) {
-        irq_restore(flags);
-        return -1;
-    }
 
-    for (uint32_t index = 0;
-         index < count;
-         index++) {
+   for (uint32_t index = 0;
+     index < (uint32_t)count;
+     index++) {
 
         uint32_t offset =
             BINFS_FIRST_ENTRY +
@@ -276,28 +270,16 @@ static int binfs_decode_entry(
  * Leer y comprobar la cabecera
  * del catalogo BINFS.
  */
+
 static int binfs_load_catalog(void) {
-    if (ata_read_sector(
-            BINFS_CATALOG_LBA,
-            catalog
-        ) != 0) {
-        return -1;
-    }
-
-    for (uint32_t i = 0; i < 8U; i++) {
-        if (catalog[i] != magic[i])
-            return -1;
-    }
-
-    uint32_t count = read_u32(&catalog[8]);
-
-    if (count == 0U ||
-        count > BINFS_MAX_FILES) {
-        return -1;
-    }
-
-    return (int)count;
+    /*
+     * El nuevo lector comprueba ambas
+     * copias BINFS v2 y selecciona
+     * la generacion valida mas reciente.
+     */
+    return binfs_catalog_read_latest(catalog);
 }
+
 
 
 
@@ -402,6 +384,12 @@ int binfs_copy_file(
     const char *source,
     const char *destination
 ) {
+    
+        /* BINFS v2: escrituras temporalmente suspendidas */
+    if (binfs_writes_paused) {
+        return -1;
+    }
+
     if (source == 0 || destination == 0)
         return -1;
 
@@ -749,6 +737,10 @@ int binfs_rename_file(
     const char *old_name,
     const char *new_name
 ) {
+       /* BINFS v2: escrituras temporalmente suspendidas */
+    if (binfs_writes_paused) {
+        return -1;
+    }
     if (old_name == 0 || new_name == 0)
         return -1;
 
@@ -929,6 +921,10 @@ int binfs_rename_file(
  * que pueden contener tombstones.
  */
 int binfs_remove_file(const char *filename) {
+        /* BINFS v2: escrituras temporalmente suspendidas */
+    if (binfs_writes_paused) {
+        return -1;
+    }
     if (filename == 0)
         return -1;
 
@@ -1072,6 +1068,10 @@ int binfs_replace_file(
     const char *source,
     const char *destination
 ) {
+       /* BINFS v2: escrituras temporalmente suspendidas */
+    if (binfs_writes_paused) {
+        return -1;
+    }
     if (source == 0 || destination == 0)
         return -1;
 

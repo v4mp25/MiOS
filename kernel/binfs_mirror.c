@@ -254,3 +254,106 @@ int binfs_generation_check(
     irq_restore(flags);
     return 0;
 }
+
+/*
+ * Seleccionar y copiar el catalogo
+ * BINFS v2 valido mas reciente.
+ *
+ * No escribe sectores ATA.
+ */
+int binfs_catalog_read_latest(
+    uint8_t *destination
+) {
+    if (destination == 0)
+        return -1;
+
+    uint32_t flags = irq_save();
+
+    int read_a = ata_read_sector(
+        BINFS_PRIMARY_CATALOG_LBA,
+        catalog_primary
+    );
+
+    int read_b = ata_read_sector(
+        BINFS_MIRROR_CATALOG_LBA,
+        catalog_mirror
+    );
+
+    int valid_a =
+        read_a == 0 &&
+        binfs_catalog_valid_v2(catalog_primary);
+
+    int valid_b =
+        read_b == 0 &&
+        binfs_catalog_valid_v2(catalog_mirror);
+
+    if (!valid_a && !valid_b) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    const uint8_t *selected = 0;
+
+    if (valid_a && valid_b) {
+        uint32_t generation_a =
+            binfs_read_u32(
+                &catalog_primary[GEN_OFFSET]
+            );
+
+        uint32_t generation_b =
+            binfs_read_u32(
+                &catalog_mirror[GEN_OFFSET]
+            );
+
+        if (generation_a == generation_b) {
+            /*
+             * Dos generaciones iguales
+             * deben contener exactamente
+             * los mismos metadatos.
+             */
+            for (uint32_t i = 0;
+                 i < ATA_SECTOR_SIZE;
+                 i++) {
+
+                if (catalog_primary[i] !=
+                    catalog_mirror[i]) {
+
+                    irq_restore(flags);
+                    return -1;
+                }
+            }
+
+            selected = catalog_primary;
+
+        } else if (generation_a > generation_b) {
+            selected = catalog_primary;
+
+        } else {
+            selected = catalog_mirror;
+        }
+
+    } else if (valid_a) {
+        selected = catalog_primary;
+
+    } else {
+        selected = catalog_mirror;
+    }
+
+    /* Copiar el catalogo seleccionado */
+    for (uint32_t i = 0;
+         i < ATA_SECTOR_SIZE;
+         i++) {
+
+        destination[i] = selected[i];
+    }
+
+    uint32_t slots =
+        binfs_read_u32(&destination[8]);
+
+    irq_restore(flags);
+
+    if (slots == 0U || slots > 4U)
+        return -1;
+
+    return (int)slots;
+}

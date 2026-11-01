@@ -38,4 +38,18 @@ int binfs_generation_check(
     BinfsGenerationStatus *result
 );
 
+/*
+ * Lee el catalogo valido mas reciente.
+ *
+ * destination debe disponer de 512 bytes.
+ *
+ * Devuelve el numero de slots (1 a 4),
+ * o -1 si no existe una copia valida.
+ *
+ * Esta funcion NO escribe al disco.
+ */
+int binfs_catalog_read_latest(
+    uint8_t *destination
+);
+
 #endif

@@ -34,7 +34,7 @@ elf_exec.o: kernel/elf_exec.c include/elf_exec.h include/elf32.h include/binfs.h
 	$(CC) $(CFLAGS) -c kernel/elf_exec.c -o elf_exec.o
 
 
-binfs.o: kernel/binfs.c include/binfs.h include/ata.h include/irq.h
+binfs.o: kernel/binfs.c include/binfs.h include/binfs_mirror.h include/ata.h include/irq.h
 	$(CC) $(CFLAGS) -c kernel/binfs.c -o binfs.o
 
 
