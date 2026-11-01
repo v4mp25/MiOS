@@ -22,6 +22,7 @@
 #include "elf32.h"
 #include "elf_disk.h"
 #include "binfs.h"
+#include "elf_exec.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -970,6 +971,7 @@ else if (iguales(linea, "help")) {
     imprimir("elfdisktest\n");
     imprimir("elfdiskrun\n");   
     imprimir("binfstest\n");
+    imprimir("run archivo.elf\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4454,6 +4456,38 @@ else if (iguales(linea, "binfstest")) {
         imprimir("BINFS TEST: ERROR\n");
     }
 }
+
+
+else if (iguales(linea, "run")) {
+
+    /* La shell ya separo los argumentos */
+    const char *filename = args;
+
+    /* Omitir espacios adicionales */
+    while (*filename == ' ') {
+        filename++;
+    }
+
+    if (*filename == '\0') {
+        imprimir("Uso: run archivo.elf\n");
+
+    } else if (!paging_cpu_enabled()) {
+        imprimir("ERROR: ejecuta pagingon.\n");
+
+    } else {
+        imprimir("Buscando archivo: ");
+        imprimir(filename);
+        imprimir("\n");
+
+        if (elf_exec_file(filename) == 0) {
+            imprimir("ELF ejecutado: OK\n");
+            imprimir("Retorno a MiOS: OK\n");
+        } else {
+            imprimir("ERROR: no se pudo ejecutar ELF.\n");
+        }
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
