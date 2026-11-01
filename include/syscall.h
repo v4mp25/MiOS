@@ -6,8 +6,20 @@
 
 #define MIOS_SYS_TEST 1U
 #define MIOS_SYS_EXIT 2U
+#define MIOS_SYS_WRITE 3U
 /* Recibe solicitudes desde el ASM */
-void syscall_dispatch(uint32_t number);
+
+/*
+ * Recibir los argumentos guardados
+ * por syscall_stub.
+ */
+void syscall_dispatch(
+    uint32_t number,
+    uint32_t user_pointer,
+    uint32_t length,
+    uint32_t saved_cs
+);
+
 
 /* Consultar cantidad de llamadas */
 uint32_t syscall_test_count(void);
