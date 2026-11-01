@@ -350,3 +350,146 @@ int binfs_recovery_check(
 
     return 0;
 }
+
+/*
+ * Seleccionar una version recuperable.
+ *
+ * A diferencia del lector anterior,
+ * tambien exige que todos los archivos
+ * referenciados conserven su checksum.
+ *
+ * No modifica el disco.
+ */
+int binfs_catalog_read_recoverable(
+    uint8_t *destination
+) {
+    if (destination == NULL)
+        return -1;
+
+    uint32_t flags = irq_save();
+
+    BinfsConsistencyReport report;
+
+    if (binfs_consistency_check(&report) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Rechazar discrepancias ambiguas
+     * entre catalogos con la misma
+     * generacion.
+     */
+    BinfsGenerationStatus status;
+
+    if (binfs_generation_check(&status) != 0) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    int valid_a =
+        report.a.catalog_valid &&
+        report.a.data_consistent;
+
+    int valid_b =
+        report.b.catalog_valid &&
+        report.b.data_consistent;
+
+    if (!valid_a && !valid_b) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    uint32_t selected_lba;
+
+    if (valid_a && valid_b) {
+        selected_lba =
+            report.a.generation >=
+            report.b.generation
+                ? BINFS_PRIMARY_CATALOG_LBA
+                : BINFS_MIRROR_CATALOG_LBA;
+
+    } else if (valid_a) {
+        selected_lba =
+            BINFS_PRIMARY_CATALOG_LBA;
+
+    } else {
+        selected_lba =
+            BINFS_MIRROR_CATALOG_LBA;
+    }
+
+    /*
+     * Volver a leer la copia seleccionada.
+     * Conservamos IRQ deshabilitadas para
+     * impedir modificaciones concurrentes
+     * desde las operaciones del kernel.
+     */
+    if (ata_read_sector(
+            selected_lba,
+            destination
+        ) != 0) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Comprobar que no cambio con respecto
+     * al catalogo que se diagnostico.
+     */
+    const uint8_t *verified =
+        selected_lba == BINFS_PRIMARY_CATALOG_LBA
+            ? catalog_a
+            : catalog_b;
+
+    for (uint32_t i = 0; i < CATALOG_SIZE; i++) {
+        if (destination[i] != verified[i]) {
+            irq_restore(flags);
+            return -1;
+        }
+    }
+
+    uint32_t slots = read32(&destination[8]);
+
+    irq_restore(flags);
+
+    if (slots == 0U || slots > MAX_SLOTS)
+        return -1;
+
+    return (int)slots;
+}
+
+/*
+ * No permitir escrituras si alguna copia
+ * carece de metadatos o datos integros.
+ *
+ * Esto es una politica conservadora:
+ * antes de reparar o actualizar,
+ * detener operaciones de modificacion.
+ */
+int binfs_recovery_write_allowed(void) {
+    uint32_t flags = irq_save();
+
+    BinfsConsistencyReport report;
+
+    if (binfs_consistency_check(&report) != 0) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    BinfsGenerationStatus status;
+
+    if (binfs_generation_check(&status) != 0) {
+        irq_restore(flags);
+        return 0;
+    }
+
+    int allowed =
+        report.a.catalog_valid &&
+        report.b.catalog_valid &&
+        report.a.data_consistent &&
+        report.b.data_consistent;
+
+    irq_restore(flags);
+    return allowed ? 1 : 0;
+}

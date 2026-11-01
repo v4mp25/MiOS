@@ -56,4 +56,26 @@ int binfs_recovery_check(
     BinfsRecoveryReport *result
 );
 
+/*
+ * Leer el catalogo mas reciente cuyos
+ * metadatos Y datos sean integros.
+ *
+ * destination debe tener 512 bytes.
+ *
+ * Devuelve numero de slots o -1.
+ * Solo lectura.
+ */
+int binfs_catalog_read_recoverable(
+    uint8_t *destination
+);
+
+/*
+ * Comprobar si es seguro iniciar una
+ * modificacion del almacenamiento.
+ *
+ * Devuelve 1 si ambas versiones son
+ * coherentes; 0 en caso contrario.
+ */
+int binfs_recovery_write_allowed(void);
+
 #endif

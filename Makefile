@@ -23,7 +23,7 @@ user_copy.o: kernel/user_copy.c include/user_copy.h include/paging.h
 elf32.o: kernel/elf32.c include/elf32.h
 	$(CC) $(CFLAGS) -c kernel/elf32.c -o elf32.o
 
-binfs_mirror.o: kernel/binfs_mirror.c include/binfs_mirror.h include/ata.h include/irq.h
+binfs_mirror.o: kernel/binfs_mirror.c include/binfs_mirror.h include/ata.h include/irq.h include/binfs_consistency.h
 	$(CC) $(CFLAGS) -c kernel/binfs_mirror.c -o binfs_mirror.o
 
 
@@ -34,7 +34,7 @@ elf_exec.o: kernel/elf_exec.c include/elf_exec.h include/elf32.h include/binfs.h
 	$(CC) $(CFLAGS) -c kernel/elf_exec.c -o elf_exec.o
 
 
-binfs.o: kernel/binfs.c include/binfs.h include/binfs_mirror.h include/ata.h include/irq.h
+binfs.o: kernel/binfs.c include/binfs.h include/binfs_mirror.h include/ata.h include/irq.h include/binfs_consistency.h
 	$(CC) $(CFLAGS) -c kernel/binfs.c -o binfs.o
 
 binfs_consistency.o: kernel/binfs_consistency.c include/binfs_consistency.h include/binfs_mirror.h include/ata.h include/irq.h

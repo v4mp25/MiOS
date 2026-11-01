@@ -914,7 +914,7 @@ void syscall_console_putc(char c) {
 
     imprimir(text);
 }
-
+static uint8_t recover_catalog_buffer[512];
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -1006,6 +1006,7 @@ else if (iguales(linea, "help")) {
     imprimir("binrepair\n");
     imprimir("binconsistency\n");
     imprimir("binrecoverycheck\n");
+    imprimir("binrecoverselect\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5138,6 +5139,50 @@ else if (iguales(linea, "binrecoverycheck")) {
                 "Se necesita nueva proteccion.\n"
             );
             imprimir("BIN RECOVERY CHECK: PARCIAL\n");
+        }
+    }
+}
+
+else if (iguales(linea, "binrecoverselect")) {
+    imprimir("=== SELECCION RECUPERABLE ===\n");
+
+    BinfsConsistencyReport report;
+
+    if (binfs_consistency_check(&report) != 0) {
+        imprimir("ERROR: diagnostico de datos.\n");
+    } else {
+        int slots =
+            binfs_catalog_read_recoverable(
+                recover_catalog_buffer
+            );
+
+        if (slots < 0) {
+            imprimir("Sin version recuperable.\n");
+            imprimir("BIN RECOVER SELECT: ERROR\n");
+        } else {
+            uint32_t generation =
+                (uint32_t)recover_catalog_buffer[480] |
+                ((uint32_t)recover_catalog_buffer[481] << 8) |
+                ((uint32_t)recover_catalog_buffer[482] << 16) |
+                ((uint32_t)recover_catalog_buffer[483] << 24);
+
+            imprimir("Version recuperable: OK\n");
+
+            imprimir("Generacion seleccionada: ");
+            imprimir_hex32(generation);
+            imprimir("\n");
+
+            imprimir("Numero de slots: ");
+            imprimir_hex32((uint32_t)slots);
+            imprimir("\n");
+
+            if (binfs_recovery_write_allowed()) {
+                imprimir("Modificaciones: PERMITIDAS\n");
+            } else {
+                imprimir("Modificaciones: BLOQUEADAS\n");
+            }
+
+            imprimir("BIN RECOVER SELECT: OK\n");
         }
     }
 }

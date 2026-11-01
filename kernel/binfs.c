@@ -5,6 +5,7 @@
 #include "ata.h"
 #include "irq.h"
 #include "binfs_mirror.h"
+#include "binfs_consistency.h"
 static int binfs_load_catalog(void);
 static uint32_t read_u32(const uint8_t *p);
 static int binfs_region_available(
@@ -332,14 +333,15 @@ static int binfs_decode_entry(
  * del catalogo BINFS.
  */
 
+
 static int binfs_load_catalog(void) {
     /*
-     * El nuevo lector comprueba ambas
-     * copias BINFS v2 y selecciona
-     * la generacion valida mas reciente.
+     * Seleccionar una version con
+     * catalogo y datos verificables.
      */
-    return binfs_catalog_read_latest(catalog);
+    return binfs_catalog_read_recoverable(catalog);
 }
+
 
 
 

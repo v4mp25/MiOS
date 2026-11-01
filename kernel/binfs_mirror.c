@@ -5,6 +5,7 @@
 #include "ata.h"
 #include "irq.h"
 #include <stddef.h>
+#include "binfs_consistency.h"
 /*
  * Etapa 4.14C.3D.1
  *
@@ -395,6 +396,15 @@ int binfs_catalog_publish(
     const uint8_t *updated,
     uint32_t expected_generation
 ) {
+    
+    /*
+     * No actualizar metadatos cuando
+     * existe una copia sin datos integros.
+     */
+    if (!binfs_recovery_write_allowed()) {
+        return -1;
+    }
+
     if (updated == 0)
         return -1;
 
