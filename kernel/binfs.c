@@ -959,14 +959,21 @@ int binfs_rename_file(
  * representar posiciones habilitadas,
  * que pueden contener tombstones.
  */
+
+/*
+ * Eliminar logicamente cualquier archivo
+ * BINFS v2 mediante catalogos A/B.
+ *
+ * No modifica los sectores del contenido.
+ * Publica un tombstone en una generacion
+ * nueva del catalogo.
+ */
 int binfs_remove_file(const char *filename) {
-        /* BINFS v2: escrituras temporalmente suspendidas */
-    if (binfs_writes_paused) {
+    if (filename == 0) {
         return -1;
     }
-    if (filename == 0)
-        return -1;
 
+    /* Validar nombre */
     uint32_t length = 0;
 
     while (length < 32U &&
@@ -974,42 +981,74 @@ int binfs_remove_file(const char *filename) {
         length++;
     }
 
-    if (length == 0U || length >= 32U)
+    if (length == 0U || length >= 32U) {
         return -1;
+    }
 
     uint32_t flags = irq_save();
 
+    /*
+     * Cargar el catalogo BINFS v2
+     * con la generacion mas reciente.
+     */
     int slots = binfs_load_catalog();
 
-    if (slots <= 0) {
+    if (slots < 1 ||
+        slots > (int)BINFS_MAX_FILES) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Obtener la generacion de la copia
+     * que acabamos de cargar.
+     *
+     * Bytes 480-483: uint32 little endian.
+     */
+    uint32_t generation =
+        (uint32_t)catalog[480] |
+        ((uint32_t)catalog[481] << 8) |
+        ((uint32_t)catalog[482] << 16) |
+        ((uint32_t)catalog[483] << 24);
+
+    if (generation == 0U ||
+        generation == UINT32_MAX) {
+
         irq_restore(flags);
         return -1;
     }
 
     int found = -1;
 
+    /*
+     * Buscar el archivo solamente
+     * entre las entradas activas.
+     */
     for (int i = 0; i < slots; i++) {
         uint32_t offset =
             BINFS_FIRST_ENTRY +
             (uint32_t)i * BINFS_ENTRY_SIZE;
 
-        if (catalog[offset] == 0U)
+        if (catalog[offset] == 0U) {
             continue;
+        }
+
+        BinfsEntry entry;
+
+        if (binfs_decode_entry(
+                (uint32_t)i,
+                &entry
+            ) != 0) {
+
+            irq_restore(flags);
+            return -1;
+        }
 
         if (names_equal(
                 filename,
                 &catalog[offset]
             )) {
-
-            BinfsEntry entry;
-
-            if (binfs_decode_entry(
-                    (uint32_t)i,
-                    &entry
-                ) != 0) {
-                irq_restore(flags);
-                return -1;
-            }
 
             found = i;
             break;
@@ -1022,76 +1061,68 @@ int binfs_remove_file(const char *filename) {
     }
 
     /*
-     * Respaldar el sector completo.
+     * Eliminar la entrada en la copia RAM.
+     *
+     * El contenido fisico del archivo
+     * permanece en su region A o B.
      */
-    uint8_t backup[BINFS_SECTOR_SIZE];
-
-    for (uint32_t i = 0;
-         i < BINFS_SECTOR_SIZE;
-         i++) {
-        backup[i] = catalog[i];
-    }
-
-    uint32_t offset =
+    uint32_t entry_offset =
         BINFS_FIRST_ENTRY +
         (uint32_t)found * BINFS_ENTRY_SIZE;
 
-    /*
-     * Borrar solamente la entrada.
-     * No modificar los datos fisicos
-     * ni desplazar otras entradas.
-     */
     for (uint32_t i = 0;
          i < BINFS_ENTRY_SIZE;
          i++) {
-        catalog[offset + i] = 0;
+
+        catalog[entry_offset + i] = 0;
     }
 
     /*
-     * El contador de slots se conserva.
-     * Las posiciones libres podran
-     * reutilizarse en otra etapa.
+     * Conservar el numero de slots:
+     * necesitamos recordar la posicion
+     * para reutilizarla posteriormente.
      */
-    if (ata_write_sector(
-            BINFS_CATALOG_LBA,
-            catalog
-        ) != 0) {
 
-        ata_write_sector(
-            BINFS_CATALOG_LBA,
-            backup
-        );
+    /*
+     * Publicar el tombstone en el
+     * catalogo inactivo.
+     *
+     * La funcion incrementa generacion,
+     * calcula checksum y verifica escritura.
+     */
+    if (binfs_catalog_publish(
+            catalog,
+            generation
+        ) != 0) {
 
         irq_restore(flags);
         return -1;
     }
 
     /*
-     * Verificar el catalogo escrito.
+     * Volver a consultar la ultima copia
+     * valida para confirmar la eliminacion.
      */
-    if (ata_read_sector(
-            BINFS_CATALOG_LBA,
-            sector
-        ) != 0) {
+    int updated_slots = binfs_load_catalog();
 
-        ata_write_sector(
-            BINFS_CATALOG_LBA,
-            backup
-        );
-
+    if (updated_slots != slots) {
         irq_restore(flags);
         return -1;
     }
 
-    for (uint32_t i = 0;
-         i < BINFS_SECTOR_SIZE;
-         i++) {
+    for (int i = 0; i < updated_slots; i++) {
+        uint32_t offset =
+            BINFS_FIRST_ENTRY +
+            (uint32_t)i * BINFS_ENTRY_SIZE;
 
-        if (sector[i] != catalog[i]) {
-            ata_write_sector(
-                BINFS_CATALOG_LBA,
-                backup
-            );
+        if (catalog[offset] == 0U) {
+            continue;
+        }
+
+        if (names_equal(
+                filename,
+                &catalog[offset]
+            )) {
 
             irq_restore(flags);
             return -1;
@@ -1101,7 +1132,6 @@ int binfs_remove_file(const char *filename) {
     irq_restore(flags);
     return 0;
 }
-
 
 int binfs_replace_file(
     const char *source,
