@@ -26,6 +26,7 @@
 #include "binfs.h"
 #include "binfs_verify.h"
 #include "binfs_mirror.h"
+
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -998,6 +999,7 @@ else if (iguales(linea, "help")) {
     imprimir("binverify\n");
     imprimir("binreplace origen.elf destino.elf\n");
     imprimir("binmirrorcheck\n");
+    imprimir("bingencheck\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4843,6 +4845,40 @@ else if (iguales(linea, "binmirrorcheck")) {
 
         imprimir("CATALOGO: DIFERENCIAS O ERROR\n");
         imprimir("BIN MIRROR CHECK: ERROR\n");
+    }
+}
+
+else if (iguales(linea, "bingencheck")) {
+    imprimir("=== GENERACIONES BINFS ===\n");
+
+    BinfsGenerationStatus status;
+
+    if (binfs_generation_check(&status) != 0) {
+        imprimir("BIN GENERATION CHECK: ERROR\n");
+    } else {
+        imprimir("Catalogo A: ");
+        imprimir(status.primary_valid ? "OK\n" : "ERROR\n");
+
+        imprimir("Catalogo B: ");
+        imprimir(status.mirror_valid ? "OK\n" : "ERROR\n");
+
+        imprimir("Generacion A: ");
+        imprimir_hex32(status.primary_generation);
+        imprimir("\n");
+
+        imprimir("Generacion B: ");
+        imprimir_hex32(status.mirror_generation);
+        imprimir("\n");
+
+        imprimir("Catalogo seleccionado LBA: ");
+        imprimir_hex32(status.selected_lba);
+        imprimir("\n");
+
+        imprimir("Generacion seleccionada: ");
+        imprimir_hex32(status.selected_generation);
+        imprimir("\n");
+
+        imprimir("BIN GENERATION CHECK: OK\n");
     }
 }
 

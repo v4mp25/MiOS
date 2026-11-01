@@ -17,4 +17,25 @@
  */
 int binfs_mirror_verify(void);
 
+/* Diagnostico de catalogos con generacion */
+typedef struct {
+    uint32_t primary_generation;
+    uint32_t mirror_generation;
+    uint32_t selected_generation;
+
+    uint32_t primary_valid;
+    uint32_t mirror_valid;
+    uint32_t selected_lba;
+} BinfsGenerationStatus;
+
+/*
+ * Valida checksums y selecciona
+ * el catalogo valido mas reciente.
+ *
+ * Solo lectura. No repara ni escribe.
+ */
+int binfs_generation_check(
+    BinfsGenerationStatus *result
+);
+
 #endif
