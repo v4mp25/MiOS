@@ -4729,10 +4729,10 @@ else if (iguales(linea, "binrm")) {
         if (binfs_remove_file(filename) == 0) {
             imprimir("Archivo retirado del catalogo: OK\n");
             imprimir("BIN RM: OK\n");
-        } else {
-            imprimir("BIN RM: ERROR\n");
-            imprimir("Solo se elimina el ultimo archivo.\n");
-        }
+        }  else {
+    imprimir("BIN RM: ERROR\n");
+    imprimir("Archivo inexistente o catalogo invalido.\n");
+}
     }
 }
 
