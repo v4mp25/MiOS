@@ -990,6 +990,7 @@ else if (iguales(linea, "help")) {
     imprimir("run archivo.elf\n");
     imprimir("syswritestats\n");
     imprimir("binls\n");
+    imprimir("bincopy origen.elf destino.elf\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -4568,6 +4569,73 @@ else if (iguales(linea, "binls")) {
         }
     }
 }
+
+else if (iguales(linea, "bincopy")) {
+    /*
+     * Sintaxis:
+     * bincopy origen.elf destino.elf
+     */
+
+    char *source = args;
+
+    while (*source == ' ')
+        source++;
+
+    char *destination = source;
+
+    /* Buscar separacion entre nombres */
+    while (*destination &&
+           *destination != ' ') {
+        destination++;
+    }
+
+    if (*destination != '\0') {
+        *destination = '\0';
+        destination++;
+
+        while (*destination == ' ')
+            destination++;
+    }
+
+    int valid = 1;
+
+    if (*source == '\0' ||
+        *destination == '\0') {
+        valid = 0;
+    }
+
+    /* No permitir un tercer argumento */
+    for (char *p = destination; *p; p++) {
+        if (*p == ' ') {
+            valid = 0;
+            break;
+        }
+    }
+
+    if (!valid) {
+        imprimir("Uso: bincopy origen.elf destino.elf\n");
+
+    } else {
+        imprimir("Copiando: ");
+        imprimir(source);
+        imprimir(" -> ");
+        imprimir(destination);
+        imprimir("\n");
+
+        if (binfs_copy_file(
+                source,
+                destination
+            ) == 0) {
+
+            imprimir("Archivo copiado: OK\n");
+            imprimir("BIN COPY: OK\n");
+
+        } else {
+            imprimir("BIN COPY: ERROR\n");
+        }
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);

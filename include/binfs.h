@@ -47,5 +47,16 @@ int binfs_get_entry(
     uint32_t index,
     BinfsEntry *result
 );
-
+/*
+ * Copiar un archivo BINFS a una entrada nueva.
+ *
+ * 0  = correcto
+ * -1 = error
+ *
+ * Solo admite un destino que no exista.
+ */
+int binfs_copy_file(
+    const char *source,
+    const char *destination
+);
 #endif

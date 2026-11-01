@@ -11,12 +11,17 @@
 #define BINFS_SECTOR_SIZE 512U
 #define BINFS_SECTORS_PER_FILE 16U
 
-#define BINFS_MAX_FILES 3U
+#define BINFS_MAX_FILES 4U
 #define BINFS_ENTRY_SIZE 64U
 #define BINFS_FIRST_ENTRY 16U
 
 static uint8_t catalog[BINFS_SECTOR_SIZE];
 static uint8_t sector[BINFS_SECTOR_SIZE];
+/*
+ * Buffer de 8192 bytes para copiar
+ * un archivo completo dentro de BINFS.
+ */
+static uint8_t copy_buffer[BINFS_MAX_FILE_SIZE];
 
 static const uint8_t magic[8] = {
     'M', 'I', 'O', 'S', 'B', 'I', 'N', '1'
@@ -327,4 +332,299 @@ int binfs_get_entry(
 
     irq_restore(flags);
     return status;
+}
+
+int binfs_copy_file(
+    const char *source,
+    const char *destination
+) {
+    if (source == 0 || destination == 0)
+        return -1;
+
+    /*
+     * Comprobar el nombre destino.
+     * Maximo: 31 caracteres y NUL.
+     * No permitir rutas ni espacios.
+     */
+    uint32_t name_length = 0;
+
+    while (name_length < 32U &&
+           destination[name_length] != '\0') {
+
+        char c = destination[name_length];
+
+        if (c == '/' || c == '\\' ||
+            c == ' ' || c == '\t' ||
+            (uint8_t)c < 33U ||
+            (uint8_t)c > 126U) {
+            return -1;
+        }
+
+        name_length++;
+    }
+
+    if (name_length == 0U ||
+        name_length >= 32U)
+        return -1;
+
+    /*
+     * Primero leer el archivo origen.
+     * binfs_read verifica su checksum.
+     */
+    uint32_t size = 0;
+
+    if (binfs_read(
+            source,
+            copy_buffer,
+            sizeof(copy_buffer),
+            &size
+        ) != 0) {
+        return -1;
+    }
+
+    if (size == 0U ||
+        size > BINFS_MAX_FILE_SIZE)
+        return -1;
+
+    uint32_t flags = irq_save();
+
+    /*
+     * Volver a leer el catalogo para
+     * trabajar con su estado actual.
+     */
+    int count = binfs_load_catalog();
+
+    if (count <= 0 ||
+        count >= (int)BINFS_MAX_FILES) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    /*
+     * Rechazar nombres repetidos.
+     */
+    for (int i = 0; i < count; i++) {
+        uint32_t offset =
+            BINFS_FIRST_ENTRY +
+            (uint32_t)i * BINFS_ENTRY_SIZE;
+
+        if (names_equal(
+                destination,
+                &catalog[offset]
+            )) {
+            irq_restore(flags);
+            return -1;
+        }
+    }
+
+    /*
+     * La siguiente posicion del catalogo
+     * sera ocupada por el archivo nuevo.
+     */
+    uint32_t index = (uint32_t)count;
+
+    uint32_t destination_lba =
+        BINFS_DATA_LBA +
+        index * BINFS_SECTORS_PER_FILE;
+
+    /*
+     * No sobrescribir sectores que
+     * ya contengan informacion.
+     */
+    for (uint32_t s = 0;
+         s < BINFS_SECTORS_PER_FILE;
+         s++) {
+
+        if (ata_read_sector(
+                destination_lba + s,
+                sector
+            ) != 0) {
+            irq_restore(flags);
+            return -1;
+        }
+
+        for (uint32_t j = 0;
+             j < BINFS_SECTOR_SIZE;
+             j++) {
+
+            if (sector[j] != 0U) {
+                irq_restore(flags);
+                return -1;
+            }
+        }
+    }
+
+    /*
+     * Copiar los datos, incluyendo los
+     * ceros que forman parte del ELF.
+     */
+    for (uint32_t s = 0;
+         s < BINFS_SECTORS_PER_FILE;
+         s++) {
+
+        uint32_t offset =
+            s * BINFS_SECTOR_SIZE;
+
+        for (uint32_t j = 0;
+             j < BINFS_SECTOR_SIZE;
+             j++) {
+
+            uint32_t position = offset + j;
+
+            sector[j] =
+                position < size
+                    ? copy_buffer[position]
+                    : 0U;
+        }
+
+        if (ata_write_sector(
+                destination_lba + s,
+                sector
+            ) != 0) {
+
+            irq_restore(flags);
+            return -1;
+        }
+    }
+
+    /*
+     * Verificar que cada byte haya sido
+     * escrito correctamente en el disco.
+     */
+    for (uint32_t s = 0;
+         s < BINFS_SECTORS_PER_FILE;
+         s++) {
+
+        if (ata_read_sector(
+                destination_lba + s,
+                sector
+            ) != 0) {
+
+            irq_restore(flags);
+            return -1;
+        }
+
+        uint32_t offset =
+            s * BINFS_SECTOR_SIZE;
+
+        for (uint32_t j = 0;
+             j < BINFS_SECTOR_SIZE;
+             j++) {
+
+            uint32_t position = offset + j;
+
+            uint8_t expected_byte =
+                position < size
+                    ? copy_buffer[position]
+                    : 0U;
+
+            if (sector[j] != expected_byte) {
+                irq_restore(flags);
+                return -1;
+            }
+        }
+    }
+
+    /*
+     * Los datos ya estan escritos
+     * y verificados.
+     *
+     * Registrar la nueva entrada.
+     */
+    uint32_t entry_offset =
+        BINFS_FIRST_ENTRY +
+        index * BINFS_ENTRY_SIZE;
+
+    for (uint32_t i = 0;
+         i < BINFS_ENTRY_SIZE;
+         i++) {
+
+        catalog[entry_offset + i] = 0;
+    }
+
+    for (uint32_t i = 0;
+         i < name_length;
+         i++) {
+
+        catalog[entry_offset + i] =
+            (uint8_t)destination[i];
+    }
+
+    /* LBA inicial */
+    catalog[entry_offset + 32U] =
+        (uint8_t)destination_lba;
+
+    catalog[entry_offset + 33U] =
+        (uint8_t)(destination_lba >> 8);
+
+    catalog[entry_offset + 34U] =
+        (uint8_t)(destination_lba >> 16);
+
+    catalog[entry_offset + 35U] =
+        (uint8_t)(destination_lba >> 24);
+
+    /* Tamaño exacto */
+    catalog[entry_offset + 36U] =
+        (uint8_t)size;
+
+    catalog[entry_offset + 37U] =
+        (uint8_t)(size >> 8);
+
+    catalog[entry_offset + 38U] =
+        (uint8_t)(size >> 16);
+
+    catalog[entry_offset + 39U] =
+        (uint8_t)(size >> 24);
+
+    /* Checksum del contenido */
+    uint32_t hash = checksum32(
+        copy_buffer,
+        size
+    );
+
+    catalog[entry_offset + 40U] =
+        (uint8_t)hash;
+
+    catalog[entry_offset + 41U] =
+        (uint8_t)(hash >> 8);
+
+    catalog[entry_offset + 42U] =
+        (uint8_t)(hash >> 16);
+
+    catalog[entry_offset + 43U] =
+        (uint8_t)(hash >> 24);
+
+    /*
+     * Actualizar el numero de archivos.
+     * El resto de los bytes 8-11 se
+     * conserva en cero.
+     */
+    uint32_t new_count = index + 1U;
+
+    catalog[8] = (uint8_t)new_count;
+    catalog[9] = 0;
+    catalog[10] = 0;
+    catalog[11] = 0;
+
+    /*
+     * Publicar el catalogo al final,
+     * despues de verificar los datos.
+     */
+    if (ata_write_sector(
+            BINFS_CATALOG_LBA,
+            catalog
+        ) != 0) {
+
+        irq_restore(flags);
+        return -1;
+    }
+
+    /* Verificar lectura del catalogo */
+    if (binfs_load_catalog() != (int)new_count) {
+        irq_restore(flags);
+        return -1;
+    }
+
+    irq_restore(flags);
+    return 0;
 }
