@@ -30,6 +30,7 @@
 #include "miosfs2_bitmap.h"
 #include "miosfs2.h"
 #include "miosfs2_disk.h"
+#include "gui.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -1016,6 +1017,7 @@ else if (iguales(linea, "help")) {
 imprimir("fs2block0\n");
 imprimir("fs2reserve0\n");
 imprimir("fs2free0\n");
+imprimir("gui\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5267,7 +5269,9 @@ else if (iguales(linea, "fs2free0")) {
         imprimir("FS2 FREE0: ERROR\n");
     }
 }
-
+else if (iguales(linea, "gui")) {
+    gui_open();
+}
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -5408,6 +5412,30 @@ as_init();
         if (codigo == 0xE1) { ignorar_pausa = 5; continue; }
         if (codigo == 0xE0) { extendido = 1; continue; }
         if (extendido) { extendido = 0; continue; }
+        
+/* Control del escritorio MiOS */
+if (gui_active()) {
+
+    /* ESC: regresar a la consola */
+    if (codigo == 0x01) {
+        gui_close();
+
+        longitud = 0;
+        color = 0x0F;
+        limpiar_pantalla();
+
+        imprimir(
+            "MiOS - Modo consola\n"
+        );
+
+        mostrar_prompt();
+    } else if ((codigo & 0x80U) == 0U) {
+        gui_key(codigo);
+    }
+
+    continue;
+}
+
 
         if (codigo == 0x2A || codigo == 0x36) { shift = 1; continue; }
         if (codigo == 0xAA || codigo == 0xB6) { shift = 0; continue; }
@@ -5418,8 +5446,11 @@ as_init();
             entrada[longitud] = '\0';
             poner_caracter('\n');
             ejecutar_comando(entrada);
-            longitud = 0;
-            mostrar_prompt();
+longitud = 0;
+
+if (!gui_active()) {
+    mostrar_prompt();
+}
         } else if (codigo == 0x0E) {
             if (longitud > 0) {
                 longitud--;
