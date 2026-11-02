@@ -5405,8 +5405,21 @@ as_init();
     mostrar_prompt();
 
     while (1) {
-        if (!(inb(0x64) & 1)) continue;
-        uint8_t codigo = inb(0x60);
+    /*
+     * Actualizar la interfaz aunque
+     * el usuario no pulse ninguna tecla.
+     */
+    if (gui_active()) {
+        gui_update();
+    }
+
+    
+if (!(inb(0x64) & 1)) {
+    continue;
+}
+
+uint8_t codigo = inb(0x60);
+
 
         if (ignorar_pausa) { ignorar_pausa--; continue; }
         if (codigo == 0xE1) { ignorar_pausa = 5; continue; }

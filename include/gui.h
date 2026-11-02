@@ -4,16 +4,21 @@
 
 #include <stdint.h>
 
-/* Abrir el escritorio */
+/* Abrir y cerrar el escritorio */
 void gui_open(void);
-
-/* Cerrar el escritorio */
 void gui_close(void);
 
-/* Consultar si esta abierto */
+/* Consultar estado */
 int gui_active(void);
 
-/* Procesar teclas dentro del escritorio */
+/* Procesar una tecla del escritorio */
 void gui_key(uint8_t scancode);
+
+/*
+ * Actualizar monitores dinamicos.
+ * Llamar desde el bucle principal,
+ * NO desde una interrupcion.
+ */
+void gui_update(void);
 
 #endif
