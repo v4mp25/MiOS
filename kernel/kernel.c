@@ -5423,8 +5423,38 @@ uint8_t codigo = inb(0x60);
 
         if (ignorar_pausa) { ignorar_pausa--; continue; }
         if (codigo == 0xE1) { ignorar_pausa = 5; continue; }
-        if (codigo == 0xE0) { extendido = 1; continue; }
-        if (extendido) { extendido = 0; continue; }
+      
+if (codigo == 0xE0) {
+    extendido = 1;
+    continue;
+}
+
+/*
+ * Teclas extendidas PS/2.
+ * Permitir las flechas dentro de la GUI.
+ */
+if (extendido) {
+    extendido = 0;
+
+    /* Ignorar eventos de liberacion */
+    if ((codigo & 0x80U) != 0U) {
+        continue;
+    }
+
+    if (gui_active()) {
+        if (codigo == 0x48 ||
+            codigo == 0x50 ||
+            codigo == 0x4B ||
+            codigo == 0x4D) {
+
+            gui_key(codigo);
+        }
+    }
+
+    /* No enviar teclas extendidas a consola */
+    continue;
+}
+
         
 /* Control del escritorio MiOS */
 if (gui_active()) {

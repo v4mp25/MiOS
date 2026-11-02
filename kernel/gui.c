@@ -5,6 +5,7 @@
 #include "process.h"
 #include "pmm.h"
 #include "interrupts.h"
+#include "gui_files.h"
 
 #define GUI_W 80
 #define GUI_H 25
@@ -399,37 +400,11 @@ static void dibujar_inicio(void) {
 }
 
 /* Ventana de archivos */
+
 static void dibujar_archivos(void) {
-    texto(
-        32, 6,
-        "SISTEMAS DE ARCHIVOS",
-        COLOR_PANEL
-    );
-
-    texto(
-        32, 9,
-        "MIOSFS01 / BINFS",
-        COLOR_PANEL
-    );
-
-    texto(
-        32, 11,
-        "MIOSFS02 en desarrollo",
-        COLOR_PANEL
-    );
-
-    texto(
-        32, 14,
-        "Comandos:",
-        COLOR_PANEL
-    );
-
-    texto(
-        32, 16,
-        "ls / binls / fs2diskcheck",
-        COLOR_PANEL
-    );
+    gui_files_draw();
 }
+
 
 /* Informacion */
 static void dibujar_acerca(void) {
@@ -568,22 +543,50 @@ int gui_active(void) {
     return activa;
 }
 
+
 void gui_key(uint8_t scancode) {
     if (!activa)
         return;
 
+    /*
+     * Si el explorador esta abierto,
+     * primero procesar sus teclas:
+     * flechas, Enter, A, B, R y Backspace.
+     */
+    if (ventana == 3) {
+        if (gui_files_key(scancode)) {
+            ultimo_tick = timer_get_ticks();
+            dibujar();
+            return;
+        }
+    }
+
+    int anterior = ventana;
+
     if (scancode == 0x0B) {
         ventana = 0;
+
     } else if (scancode >= 0x02 &&
                scancode <= 0x05) {
+
         ventana = scancode - 1;
+
     } else {
         return;
+    }
+
+    /*
+     * Al entrar a Archivos, cargar
+     * la lista actual desde el disco.
+     */
+    if (ventana == 3 && anterior != 3) {
+        gui_files_open();
     }
 
     ultimo_tick = timer_get_ticks();
     dibujar();
 }
+
 
 /*
  * Actualizar como maximo cada 25 ticks.
