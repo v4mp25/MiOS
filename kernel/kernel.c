@@ -33,6 +33,7 @@
 #include "gui.h"
 #include "framebuffer.h"
 #include "graphics.h"
+#include "serial.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -1022,6 +1023,7 @@ imprimir("fs2free0\n");
 imprimir("gui\n");
 imprimir("fbcheck\n");
 imprimir("gfxtest\n");
+imprimir("serialtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5355,6 +5357,22 @@ else if (iguales(linea, "gfxtest")) {
     }
 }
 
+else if (iguales(linea, "serialtest")) {
+    imprimir("=== PRUEBA SERIAL COM1 ===\n");
+
+    if (!serial_available()) {
+        imprimir("SERIAL TEST: ERROR\n");
+    } else {
+        serial_write("\n");
+        serial_write("MiOS COM1: FUNCIONANDO\n");
+        serial_write("Kernel x86 32 bits\n");
+        serial_write("SERIAL TEST: OK\n");
+
+        imprimir("Mensaje enviado a COM1.\n");
+        imprimir("SERIAL TEST: OK\n");
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
@@ -5454,8 +5472,53 @@ else if (shift && mapa_shift[codigo]) {
 
 void kernel_main(uint32_t multiboot_magic,
     uint32_t multiboot_info) {
+        
+/* Consola de diagnostico independiente de VGA */
+serial_init();
+
+serial_write("\n");
+serial_write("=== MiOS SERIAL DEBUG ===\n");
+serial_write("Kernel iniciado.\n");
+
+serial_write("Multiboot magic: ");
+serial_write_hex32(multiboot_magic);
+serial_write("\n");
+
         mbi_saved_address = multiboot_info;
         framebuffer_probe(multiboot_magic, multiboot_info);
+        
+const MiosFramebufferInfo *boot_fb =
+    framebuffer_get_info();
+
+serial_write("Framebuffer: ");
+
+if (!boot_fb->available) {
+    serial_write("NO DISPONIBLE\n");
+
+} else {
+    serial_write("DETECTADO\n");
+
+    serial_write("Direccion: ");
+    serial_write_hex32(boot_fb->address_low);
+    serial_write("\n");
+
+    serial_write("Ancho: ");
+    serial_write_hex32(boot_fb->width);
+    serial_write("\n");
+
+    serial_write("Alto: ");
+    serial_write_hex32(boot_fb->height);
+    serial_write("\n");
+
+    serial_write("BPP: ");
+    serial_write_hex32(boot_fb->bpp);
+    serial_write("\n");
+
+    serial_write("Tipo: ");
+    serial_write_hex32(boot_fb->type);
+    serial_write("\n");
+}
+
             memory_map_init(multiboot_magic, multiboot_info);
             int pmm_status = pmm_init();
 (void)pmm_status;
