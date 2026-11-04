@@ -5622,7 +5622,7 @@ uint32_t desktop_window = 0U;
 int desktop_extended = 0;
 
 /* Dibujar la pantalla inicial */
-if (fb_desktop_draw(desktop_window) != 0) {
+if (fb_desktop_draw_live(desktop_window) != 0) {
     serial_write("ERROR: dibujando escritorio.\n");
 } else {
     serial_write("DESKTOP READY: OK\n");
@@ -5704,7 +5704,7 @@ for (;;) {
     }
 
     if (redraw) {
-        if (fb_desktop_draw(desktop_window) != 0) {
+        if (fb_desktop_draw_live(desktop_window) != 0) {
             serial_write("ERROR: cambio de ventana.\n");
         }
     }

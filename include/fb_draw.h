@@ -42,4 +42,9 @@ int fb_draw_demo(void);
  * 4 = Acerca de
  */
 int fb_desktop_draw(uint32_t window);
+/*
+ * Dibujar escritorio con consultas
+ * reales al kernel.
+ */
+int fb_desktop_draw_live(uint32_t window);
 #endif

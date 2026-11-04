@@ -138,8 +138,10 @@ paging.o: kernel/paging.c include/paging.h include/pmm.h include/irq.h include/f
 gdt.o: kernel/gdt.c include/gdt.h include/tss.h
 	$(CC) $(CFLAGS) -c kernel/gdt.c -o gdt.o
 
-fb_draw.o: kernel/fb_draw.c include/fb_draw.h include/framebuffer.h include/paging.h
+
+fb_draw.o: kernel/fb_draw.c include/fb_draw.h include/fb_text.h include/framebuffer.h include/paging.h include/process.h include/pmm.h include/binfs.h
 	$(CC) $(CFLAGS) -c kernel/fb_draw.c -o fb_draw.o
+
 
 
 user/hola.o: user/hola.asm

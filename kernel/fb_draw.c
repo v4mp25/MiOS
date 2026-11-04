@@ -7,7 +7,9 @@
 #include "paging.h"
 #include "serial.h"
 #include "fb_text.h"
-
+#include "process.h"
+#include "pmm.h"
+#include "binfs.h"
 static const MiosFramebufferInfo *fb = NULL;
 static volatile uint8_t *fb_video = NULL;
 
@@ -627,6 +629,347 @@ int fb_desktop_draw(uint32_t window) {
             2,
             25, 55, 85
         );
+    }
+
+    return 0;
+}
+
+/*
+ * Convertir enteros a texto decimal.
+ * No necesita sprintf ni libc.
+ */
+static void fb_number(
+    int x,
+    int y,
+    uint32_t value,
+    int scale,
+    uint8_t r,
+    uint8_t g,
+    uint8_t b
+) {
+    char text[11];
+    char reversed[10];
+    uint32_t count = 0;
+
+    do {
+        reversed[count++] =
+            (char)('0' + value % 10U);
+
+        value /= 10U;
+    } while (value && count < 10U);
+
+    for (uint32_t i = 0; i < count; i++) {
+        text[i] = reversed[count - 1U - i];
+    }
+
+    text[count] = '\0';
+
+    fb_text_draw(
+        x, y, text, scale, r, g, b
+    );
+}
+
+static const char *fb_process_state(
+    ProcessState state
+) {
+    switch (state) {
+        case PROCESS_READY:
+            return "LISTO";
+
+        case PROCESS_RUNNING:
+            return "EJECUTANDO";
+
+        case PROCESS_TERMINATED:
+            return "TERMINADO";
+
+        default:
+            return "DESCONOCIDO";
+    }
+}
+
+static void fb_monitor_processes(void) {
+    const uint8_t r = 25;
+    const uint8_t g = 55;
+    const uint8_t b = 85;
+
+    fb_text_draw(
+        195, 155,
+        "PID    NOMBRE          ESTADO",
+        1, r, g, b
+    );
+
+    uint32_t count = 0U;
+
+    for (uint32_t i = 0;
+         i < MIOS_MAX_PROCESSES;
+         i++) {
+
+        ProcessInfo info;
+
+        if (process_get_info(i, &info) != 0)
+            continue;
+
+        if (info.state == PROCESS_FREE)
+            continue;
+
+        int y = 190 + (int)i * 48;
+
+        fb_number(
+            195, y,
+            info.pid, 2,
+            r, g, b
+        );
+
+        fb_text_draw(
+            246, y,
+            info.name, 1,
+            r, g, b
+        );
+
+        fb_text_draw(
+            410, y,
+            fb_process_state(info.state),
+            1, r, g, b
+        );
+
+        count++;
+    }
+
+    if (count == 0U) {
+        fb_text_draw(
+            195, 210,
+            "SIN PROCESOS REGISTRADOS",
+            1, r, g, b
+        );
+    }
+
+    fb_text_draw(
+        195, 330,
+        "TOTAL DE PROCESOS:",
+        2, r, g, b
+    );
+
+    fb_number(
+        440, 330,
+        count, 2,
+        r, g, b
+    );
+}
+
+static void fb_monitor_memory(void) {
+    const uint8_t r = 25;
+    const uint8_t g = 55;
+    const uint8_t b = 85;
+
+    uint32_t total = pmm_total_frames();
+    uint32_t free = pmm_free_frames();
+    uint32_t used = pmm_used_frames();
+
+    fb_text_draw(
+        195, 160,
+        "MARCOS TOTALES:",
+        2, r, g, b
+    );
+
+    fb_number(
+        425, 160, total,
+        2, r, g, b
+    );
+
+    fb_text_draw(
+        195, 207,
+        "MARCOS LIBRES:",
+        2, r, g, b
+    );
+
+    fb_number(
+        410, 207, free,
+        2, r, g, b
+    );
+
+    fb_text_draw(
+        195, 254,
+        "MARCOS USADOS:",
+        2, r, g, b
+    );
+
+    fb_number(
+        410, 254, used,
+        2, r, g, b
+    );
+
+    /*
+     * Evitar multiplicacion grande
+     * antes de dividir.
+     */
+    uint32_t percent = 0U;
+
+    if (total != 0U) {
+        percent =
+            (used / total) * 100U +
+            ((used % total) * 100U) / total;
+    }
+
+    if (percent > 100U)
+        percent = 100U;
+
+    fb_text_draw(
+        195, 310,
+        "USO:",
+        2, r, g, b
+    );
+
+    fb_number(
+        258, 310, percent,
+        2, r, g, b
+    );
+
+    fb_text_draw(
+        294, 310,
+        "%",
+        2, r, g, b
+    );
+
+    /* Fondo de la barra */
+    fb_draw_rect(
+        195, 355, 340, 24,
+        175, 194, 212
+    );
+
+    /* Barra de memoria ocupada */
+    uint32_t width =
+        (percent * 340U) / 100U;
+
+    if (width > 0U) {
+        fb_draw_rect(
+            195, 355,
+            (int)width, 24,
+            0, 125, 173
+        );
+    }
+
+    fb_text_draw(
+        195, 395,
+        "PAGINA: 4096 BYTES",
+        1, r, g, b
+    );
+}
+
+static void fb_monitor_files(void) {
+    const uint8_t r = 25;
+    const uint8_t g = 55;
+    const uint8_t b = 85;
+
+    fb_text_draw(
+        195, 155,
+        "ARCHIVOS BINFS",
+        2, r, g, b
+    );
+
+    int count = binfs_count();
+
+    if (count < 0) {
+        fb_text_draw(
+            195, 210,
+            "CATALOGO NO DISPONIBLE",
+            1, r, g, b
+        );
+
+        return;
+    }
+
+    if (count == 0) {
+        fb_text_draw(
+            195, 210,
+            "NO HAY ARCHIVOS",
+            1, r, g, b
+        );
+
+        return;
+    }
+
+    fb_text_draw(
+        195, 205,
+        "NOMBRE",
+        1, r, g, b
+    );
+
+    fb_text_draw(
+        425, 205,
+        "BYTES",
+        1, r, g, b
+    );
+
+    /* El prototipo BINFS admite
+       hasta cuatro archivos. */
+    if (count > 4)
+        count = 4;
+
+    for (int i = 0; i < count; i++) {
+        BinfsEntry entry;
+
+        if (binfs_get_entry(
+                (uint32_t)i,
+                &entry
+            ) != 0) {
+            fb_text_draw(
+                195, 375,
+                "ERROR LEYENDO ARCHIVOS",
+                1, r, g, b
+            );
+            return;
+        }
+
+        int y = 235 + i * 36;
+
+        fb_text_draw(
+            195, y,
+            entry.name,
+            1, r, g, b
+        );
+
+        fb_number(
+            425, y,
+            entry.size,
+            1, r, g, b
+        );
+    }
+}
+
+/*
+ * Dibujar escritorio con informacion real.
+ *
+ * Primero redibuja el menu y la ventana,
+ * despues incorpora los datos del kernel.
+ */
+int fb_desktop_draw_live(uint32_t window) {
+    if (fb_desktop_draw(window) != 0)
+        return -1;
+
+    if (window == 1U) {
+        /* Limpiar el texto decorativo */
+        fb_draw_rect(
+            170, 132, 444, 300,
+            236, 244, 252
+        );
+
+        fb_monitor_processes();
+
+    } else if (window == 2U) {
+        fb_draw_rect(
+            170, 132, 444, 300,
+            236, 244, 252
+        );
+
+        fb_monitor_memory();
+
+    } else if (window == 3U) {
+        fb_draw_rect(
+            170, 132, 444, 300,
+            236, 244, 252
+        );
+
+        fb_monitor_files();
     }
 
     return 0;
