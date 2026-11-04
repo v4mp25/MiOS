@@ -436,3 +436,198 @@ int fb_draw_demo(void) {
     return 0;
 }
 
+
+/*
+ * MiOS Desktop 0.4D.3
+ *
+ * Escritorio interactivo por teclado.
+ * Redibuja la pantalla segun la ventana.
+ */
+int fb_desktop_draw(uint32_t window) {
+    if (window > 4U)
+        return -1;
+
+    /* Dibujar el escritorio base */
+    if (fb_draw_demo() != 0)
+        return -1;
+
+    static const char *menu[5] = {
+        "INICIO",
+        "PROCESOS",
+        "MEMORIA",
+        "ARCHIVOS",
+        "ACERCA"
+    };
+
+    static const char *titles[5] = {
+        "BIENVENIDO A MIOS",
+        "ADMINISTRADOR DE PROCESOS",
+        "ADMINISTRADOR DE MEMORIA",
+        "EXPLORADOR DE ARCHIVOS",
+        "ACERCA DE MIOS"
+    };
+
+    /* Actualizar todas las opciones del menu */
+    for (uint32_t i = 0; i < 5U; i++) {
+        int y = 136 + (int)i * 54;
+
+        if (i == window) {
+            fb_draw_rect(
+                30, y, 112, 43,
+                0, 125, 173
+            );
+        } else {
+            fb_draw_rect(
+                30, y, 112, 43,
+                40, 79, 120
+            );
+        }
+
+        fb_text_draw(
+            39,
+            y + 17,
+            menu[i],
+            1,
+            255, 255, 255
+        );
+    }
+
+    /* Limpiar el contenido anterior */
+    fb_draw_rect(
+        170, 132, 444, 300,
+        236, 244, 252
+    );
+
+    /* Actualizar barra del titulo */
+    fb_draw_rect(
+        170, 78, 444, 54,
+        34, 107, 180
+    );
+
+    fb_text_draw(
+        190, 96,
+        titles[window],
+        2,
+        255, 255, 255
+    );
+
+    if (window == 0U) {
+        fb_text_draw(
+            198, 175,
+            "SISTEMA OPERATIVO",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 220,
+            "KERNEL X86 32 BIT",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 265,
+            "FRAMEBUFFER RGB OK",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 310,
+            "PAGINACION ACTIVA",
+            2,
+            25, 55, 85
+        );
+
+    } else if (window == 1U) {
+        fb_text_draw(
+            198, 180,
+            "GESTION DE PROCESOS",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 230,
+            "PID Y ESTADOS",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 280,
+            "PLANIFICADOR ROUND ROBIN",
+            1,
+            25, 55, 85
+        );
+
+    } else if (window == 2U) {
+        fb_text_draw(
+            198, 180,
+            "MEMORIA FISICA Y VIRTUAL",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 230,
+            "PAGINAS DE 4096 BYTES",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 280,
+            "ADMINISTRADOR PMM",
+            2,
+            25, 55, 85
+        );
+
+    } else if (window == 3U) {
+        fb_text_draw(
+            198, 180,
+            "SISTEMAS DE ARCHIVOS",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 230,
+            "MIOSFS01 Y BINFS",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 280,
+            "MIOSFS02 EN DESARROLLO",
+            1,
+            25, 55, 85
+        );
+
+    } else if (window == 4U) {
+        fb_text_draw(
+            198, 180,
+            "MIOS DESKTOP 0.4D",
+            2,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 230,
+            "KERNEL PROPIO EN C Y ASM",
+            1,
+            25, 55, 85
+        );
+
+        fb_text_draw(
+            198, 280,
+            "ARQUITECTURA X86",
+            2,
+            25, 55, 85
+        );
+    }
+
+    return 0;
+}

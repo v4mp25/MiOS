@@ -32,5 +32,14 @@ int fb_draw_rect(
 
 /* Primera demostracion grafica */
 int fb_draw_demo(void);
-
+/*
+ * Dibujar una ventana del escritorio.
+ *
+ * 0 = Inicio
+ * 1 = Procesos
+ * 2 = Memoria
+ * 3 = Archivos
+ * 4 = Acerca de
+ */
+int fb_desktop_draw(uint32_t window);
 #endif

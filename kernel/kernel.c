@@ -5612,10 +5612,102 @@ if (!framebuffer_map_ready()) {
  * El resto de MiOS queda intacto,
  * pero no iniciamos la consola VGA.
  */
-serial_write("Modo demo activo.\n");
 
+serial_write("MiOS Desktop interactivo.\n");
+
+/* Ventana seleccionada */
+uint32_t desktop_window = 0U;
+
+/* Prefijo de tecla extendida PS/2 */
+int desktop_extended = 0;
+
+/* Dibujar la pantalla inicial */
+if (fb_desktop_draw(desktop_window) != 0) {
+    serial_write("ERROR: dibujando escritorio.\n");
+} else {
+    serial_write("DESKTOP READY: OK\n");
+}
+
+/*
+ * Bucle experimental de entrada.
+ *
+ * Utiliza el teclado PS/2 directamente,
+ * sin iniciar la consola VGA.
+ */
 for (;;) {
-    __asm__ volatile("sti; hlt");
+    /* Sin datos del teclado */
+    if ((inb(0x64) & 0x01U) == 0U) {
+        __asm__ volatile("pause");
+        continue;
+    }
+
+    uint8_t code = inb(0x60);
+
+    /* Prefijo de tecla extendida */
+    if (code == 0xE0U) {
+        desktop_extended = 1;
+        continue;
+    }
+
+    /* Ignorar liberacion de teclas */
+    if (code & 0x80U) {
+        desktop_extended = 0;
+        continue;
+    }
+
+    int redraw = 0;
+
+    if (desktop_extended) {
+        desktop_extended = 0;
+
+        /* Flecha arriba */
+        if (code == 0x48U) {
+            if (desktop_window > 0U) {
+                desktop_window--;
+                redraw = 1;
+            }
+        }
+
+        /* Flecha abajo */
+        else if (code == 0x50U) {
+            if (desktop_window < 4U) {
+                desktop_window++;
+                redraw = 1;
+            }
+        }
+
+    } else {
+        /* Teclas numericas 1 a 4 */
+        if (code >= 0x02U &&
+            code <= 0x05U) {
+
+            desktop_window = code - 1U;
+            redraw = 1;
+        }
+
+        /* Tecla 0: Inicio */
+        else if (code == 0x0BU) {
+            desktop_window = 0U;
+            redraw = 1;
+        }
+
+        /* ESC: Inicio */
+        else if (code == 0x01U) {
+            desktop_window = 0U;
+            redraw = 1;
+        }
+
+        /* Enter: actualizar seleccion */
+        else if (code == 0x1CU) {
+            redraw = 1;
+        }
+    }
+
+    if (redraw) {
+        if (fb_desktop_draw(desktop_window) != 0) {
+            serial_write("ERROR: cambio de ventana.\n");
+        }
+    }
 }
 
 #endif
