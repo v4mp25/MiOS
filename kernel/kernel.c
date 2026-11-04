@@ -32,6 +32,7 @@
 #include "miosfs2_disk.h"
 #include "gui.h"
 #include "framebuffer.h"
+#include "graphics.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -1020,6 +1021,7 @@ imprimir("fs2reserve0\n");
 imprimir("fs2free0\n");
 imprimir("gui\n");
 imprimir("fbcheck\n");
+imprimir("gfxtest\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5316,10 +5318,43 @@ else if (iguales(linea, "fbcheck")) {
         imprimir_hex32(fb->type);
         imprimir("\n");
 
-        imprimir("Framebuffer detectado, no mapeado.\n");
-        imprimir("FB CHECK: OK\n");
+      
+if (fb->type == 2U) {
+    imprimir("Modo de video: EGA/VGA TEXTO\n");
+    imprimir("No admite dibujo RGB por pixel.\n");
+    imprimir("FB CHECK: TEXT MODE\n");
+
+} else if (fb->type == 1U &&
+           fb->bpp == 32U &&
+           fb->address_high == 0U) {
+
+    imprimir("Modo de video: RGB 32 BPP\n");
+    imprimir("Framebuffer grafico detectado.\n");
+    imprimir("Pendiente: validar formato y mapear.\n");
+    imprimir("FB CHECK: GRAPHICS DETECTED\n");
+
+} else {
+    imprimir("Formato de video no soportado.\n");
+    imprimir("FB CHECK: UNSUPPORTED\n");
+}
+
     }
 }
+
+else if (iguales(linea, "gfxtest")) {
+    imprimir("=== MIOS GRAPHICS TEST ===\n");
+
+    if (gfx_selftest() == 0) {
+        imprimir("Buffer de pixeles: OK\n");
+        imprimir("Color RGB: OK\n");
+        imprimir("Dibujo de rectangulos: OK\n");
+        imprimir("Limites de pantalla: OK\n");
+        imprimir("GFX TEST: OK\n");
+    } else {
+        imprimir("GFX TEST: ERROR\n");
+    }
+}
+
 
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
