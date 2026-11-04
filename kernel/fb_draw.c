@@ -1136,3 +1136,49 @@ void fb_cursor_show(int x, int y) {
 
     cursor_visible = 1;
 }
+
+/*
+ * MiOS Desktop 0.5D
+ *
+ * Resaltar la opcion del menu
+ * sobre la que esta el raton.
+ *
+ * hover = 0..4: opcion
+ * hover = -1: ninguna
+ */
+void fb_desktop_hover(int hover, int selected) {
+    static const char *names[5] = {
+        "INICIO",
+        "PROCESOS",
+        "MEMORIA",
+        "ARCHIVOS",
+        "ACERCA"
+    };
+
+    for (int i = 0; i < 5; i++) {
+        int y = 136 + i * 54;
+
+        if (i == hover) {
+            fb_draw_rect(
+                30, y, 112, 43,
+                20, 145, 195
+            );
+        } else if (i == selected) {
+            fb_draw_rect(
+                30, y, 112, 43,
+                0, 125, 173
+            );
+        } else {
+            fb_draw_rect(
+                30, y, 112, 43,
+                40, 79, 120
+            );
+        }
+
+        fb_text_draw(
+            39, y + 17,
+            names[i], 1,
+            255, 255, 255
+        );
+    }
+}

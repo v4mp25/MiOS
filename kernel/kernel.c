@@ -5684,7 +5684,7 @@ if (fb_desktop_draw_live(desktop_window) != 0) {
  * Utiliza el teclado PS/2 directamente,
  * sin iniciar la consola VGA.
  */
-
+int last_hover = -1;
 for (;;) {
      int redraw = 0;
     uint8_t code = 0;
@@ -5739,10 +5739,36 @@ last_packet = state.packet_count;
  * Redibujar el escritorio
  * y colocar el cursor encima.
  */
+
+/*
+ * Identificar opcion bajo el cursor.
+ */
+int hover = desktop_mouse_hit(
+    state.x,
+    state.y
+);
+
+/*
+ * Restaurar el fondo antes
+ * de actualizar botones.
+ */
+fb_cursor_hide();
+
+if (hover != last_hover) {
+    fb_desktop_hover(
+        hover,
+        (int)desktop_window
+    );
+
+    last_hover = hover;
+}
+
+/* Dibujar el cursor nuevamente */
 fb_cursor_show(
     (int)state.x,
     (int)state.y
 );
+
 /*if (fb_desktop_draw_live(desktop_window) == 0) {
     fb_draw_cursor(
         (int)state.x,
