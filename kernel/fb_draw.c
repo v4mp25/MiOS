@@ -7,6 +7,7 @@
 #include "paging.h"
 #include "serial.h"
 #include "fb_text.h"
+
 static const MiosFramebufferInfo *fb = NULL;
 static volatile uint8_t *fb_video = NULL;
 
@@ -282,122 +283,156 @@ int fb_draw_clear(
     );
 }
 
+
 int fb_draw_demo(void) {
     if (!fb_draw_ready())
         return -1;
 
-    /* Fondo azul oscuro */
+    /* Fondo del escritorio */
     if (fb_draw_clear(15, 37, 70) != 0)
         return -1;
 
     /* Barra superior */
+    fb_draw_rect(0, 0, 640, 56, 0, 125, 173);
+
+    fb_text_draw(
+        20, 18, "MIOS DESKTOP",
+        2, 255, 255, 255
+    );
+
+    fb_text_draw(
+        350, 23, "KERNEL X86 32 BIT",
+        1, 255, 255, 255
+    );
+
+    /* Panel lateral */
     fb_draw_rect(
-        0, 0, 640, 56,
+        20, 78, 132, 360,
+        31, 61, 98
+    );
+
+    fb_text_draw(
+        48, 96, "MENU",
+        2, 255, 255, 255
+    );
+
+    /* Inicio seleccionado */
+    fb_draw_rect(
+        30, 136, 112, 43,
         0, 125, 173
     );
 
-    /* Sombra de la ventana */
-    fb_draw_rect(
-        116, 104, 420, 302,
-        6, 20, 40
+    fb_text_draw(
+        47, 150, "INICIO",
+        2, 255, 255, 255
     );
 
-    /* Ventana blanca */
+    /* Otras opciones */
     fb_draw_rect(
-        108, 96, 420, 302,
+        30, 190, 112, 43,
+        40, 79, 120
+    );
+
+    fb_text_draw(
+        42, 204, "PROCESOS",
+        1, 255, 255, 255
+    );
+
+    fb_draw_rect(
+        30, 244, 112, 43,
+        40, 79, 120
+    );
+
+    fb_text_draw(
+        45, 258, "MEMORIA",
+        1, 255, 255, 255
+    );
+
+    fb_draw_rect(
+        30, 298, 112, 43,
+        40, 79, 120
+    );
+
+    fb_text_draw(
+        42, 312, "ARCHIVOS",
+        1, 255, 255, 255
+    );
+
+    fb_draw_rect(
+        30, 352, 112, 43,
+        40, 79, 120
+    );
+
+    fb_text_draw(
+        48, 366, "ACERCA",
+        1, 255, 255, 255
+    );
+
+    /* Sombra y ventana principal */
+    fb_draw_rect(
+        176, 84, 444, 354,
+        5, 20, 40
+    );
+
+    fb_draw_rect(
+        170, 78, 444, 354,
         236, 244, 252
     );
 
     /* Barra de titulo */
     fb_draw_rect(
-        108, 96, 420, 42,
+        170, 78, 444, 54,
         34, 107, 180
     );
 
-    /* Elementos decorativos */
-    fb_draw_rect(
-        139, 166, 305, 19,
-        181, 203, 226
+    fb_text_draw(
+        190, 96, "BIENVENIDO A MIOS",
+        2, 255, 255, 255
     );
 
-    fb_draw_rect(
-        139, 201, 235, 19,
-        181, 203, 226
+    /* Informacion de inicio */
+    fb_text_draw(
+        198, 170, "SISTEMA OPERATIVO",
+        2, 25, 55, 85
     );
 
-    fb_draw_rect(
-        139, 236, 270, 19,
-        181, 203, 226
+    fb_text_draw(
+        198, 218, "KERNEL X86 32 BIT",
+        2, 25, 55, 85
     );
 
-    /* Boton azul */
+    fb_text_draw(
+        198, 261, "FRAMEBUFFER RGB OK",
+        2, 25, 55, 85
+    );
+
+    fb_text_draw(
+        198, 304, "PAGINACION ACTIVA",
+        2, 25, 55, 85
+    );
+
+    /* Elemento visual inferior */
     fb_draw_rect(
-        380, 320, 112, 42,
+        480, 366, 112, 43,
         0, 125, 173
     );
 
-    /*
-     * MIOS DESKTOP 0.4D.1
-     * Primeras letras graficas.
-     */
+    fb_text_draw(
+        515, 379, "MIOS",
+        2, 255, 255, 255
+    );
 
-    /* Nombre del sistema en barra superior */
-    if (fb_text_draw(
-            20, 18,
-            "MIOS DESKTOP",
-            2,
-            255, 255, 255
-        ) != 0) {
-        return -1;
-    }
+    /* Barra inferior */
+    fb_draw_rect(
+        0, 456, 640, 24,
+        21, 56, 88
+    );
 
-    /* Titulo de la ventana */
-    if (fb_text_draw(
-            130, 110,
-            "VENTANA GRAFICA",
-            2,
-            255, 255, 255
-        ) != 0) {
-        return -1;
-    }
-
-    /* Informacion del sistema */
-    if (fb_text_draw(
-            140, 168,
-            "KERNEL X86 32 BIT",
-            2,
-            25, 55, 85
-        ) != 0) {
-        return -1;
-    }
-
-    if (fb_text_draw(
-            140, 203,
-            "FRAMEBUFFER RGB OK",
-            2,
-            25, 55, 85
-        ) != 0) {
-        return -1;
-    }
-
-    if (fb_text_draw(
-            140, 238,
-            "PAGINACION ACTIVA",
-            2,
-            25, 55, 85
-        ) != 0) {
-        return -1;
-    }
-
-    /* Texto del boton */
-    if (fb_text_draw(
-            423, 333,
-            "OK",
-            2,
-            255, 255, 255
-        ) != 0) {
-        return -1;
-    }
+    fb_text_draw(
+        20, 464, "MIOS DESKTOP 0.4D",
+        1, 255, 255, 255
+    );
 
     return 0;
 }
+
