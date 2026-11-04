@@ -15,7 +15,12 @@ typedef struct {
     uint32_t pitch;
     uint32_t bpp;
     uint32_t type;
-
+uint8_t red_position;
+uint8_t red_size;
+uint8_t green_position;
+uint8_t green_size;
+uint8_t blue_position;
+uint8_t blue_size;
 } MiosFramebufferInfo;
 
 /*

@@ -34,6 +34,12 @@
 #include "framebuffer.h"
 #include "graphics.h"
 #include "serial.h"
+#include "fb_draw.h"
+/*
+ * 1 = demostracion grafica automatica.
+ * 0 = arranque normal de MiOS.
+ */
+#define MIOS_FB_DEMO 1
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -5560,6 +5566,60 @@ as_init();
     gdt_init();
     tss_load();
  interrupts_init();
+ 
+#if MIOS_FB_DEMO
+
+serial_write("\n");
+serial_write("=== MIOS PIXEL DEMO ===\n");
+
+if (!framebuffer_map_ready()) {
+    serial_write("ERROR: framebuffer sin mapeo.\n");
+
+} else {
+    serial_write("FB MAP: OK\n");
+
+    serial_write("Activando paginacion...\n");
+
+    int pg_result = paging_enable();
+
+    if (pg_result != 0 ||
+        !paging_cpu_enabled()) {
+
+        serial_write("ERROR: paginacion.\n");
+
+    } else {
+        serial_write("PAGING: OK\n");
+
+        serial_write("Directorio CR3: ");
+        serial_write_hex32(
+            paging_directory_address()
+        );
+        serial_write("\n");
+
+        serial_write("Preparando RGB...\n");
+
+        if (fb_draw_demo() == 0) {
+            serial_write("FB DRAW: OK\n");
+            serial_write("PIXEL DEMO: OK\n");
+        } else {
+            serial_write("FB DRAW: ERROR\n");
+        }
+    }
+}
+
+/*
+ * Detener aqui la demostracion.
+ * El resto de MiOS queda intacto,
+ * pero no iniciamos la consola VGA.
+ */
+serial_write("Modo demo activo.\n");
+
+for (;;) {
+    __asm__ volatile("sti; hlt");
+}
+
+#endif
+
     color = 0x0A;
     imprimir("================================\n");
     imprimir("MIOS - SISTEMA OPERATIVO v0.5\n");

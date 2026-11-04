@@ -20,6 +20,39 @@ static uint32_t read32(
            ((uint32_t)p[3] << 24);
 }
 
+/*
+ * Comprobar que los campos RGB
+ * representan tres canales de 8 bits
+ * sin solapamiento.
+ */
+static int valid_rgb_fields(
+    const volatile uint8_t *p
+) {
+    uint32_t rp = p[0];
+    uint32_t rs = p[1];
+
+    uint32_t gp = p[2];
+    uint32_t gs = p[3];
+
+    uint32_t bp = p[4];
+    uint32_t bs = p[5];
+
+    if (rs != 8U || gs != 8U || bs != 8U)
+        return 0;
+
+    if (rp > 24U || gp > 24U || bp > 24U)
+        return 0;
+
+    uint32_t rm = 0xFFU << rp;
+    uint32_t gm = 0xFFU << gp;
+    uint32_t bm = 0xFFU << bp;
+
+    if ((rm & gm) || (rm & bm) || (gm & bm))
+        return 0;
+
+    return 1;
+}
+
 void framebuffer_probe(
     uint32_t multiboot_magic,
     uint32_t multiboot_info
@@ -65,6 +98,43 @@ void framebuffer_probe(
     fb_info.height = read32(mb + 104);
     fb_info.bpp    = mb[108];
     fb_info.type   = mb[109];
+   
+if (fb_info.type == 1U) {
+    /*
+     * Multiboot 1 especifica color_info
+     * desde el offset 110.
+     *
+     * Aceptar tambien el offset 112
+     * cuando los campos en 110 no
+     * representen un RGB888 valido.
+     */
+    uint32_t rgb_offset = 110U;
+
+    if (!valid_rgb_fields(mb + rgb_offset)) {
+        rgb_offset = 112U;
+    }
+
+    if (valid_rgb_fields(mb + rgb_offset)) {
+        fb_info.red_position =
+            mb[rgb_offset + 0U];
+
+        fb_info.red_size =
+            mb[rgb_offset + 1U];
+
+        fb_info.green_position =
+            mb[rgb_offset + 2U];
+
+        fb_info.green_size =
+            mb[rgb_offset + 3U];
+
+        fb_info.blue_position =
+            mb[rgb_offset + 4U];
+
+        fb_info.blue_size =
+            mb[rgb_offset + 5U];
+    }
+}
+
 
     if (fb_info.width == 0U ||
         fb_info.height == 0U ||
