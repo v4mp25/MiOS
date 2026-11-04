@@ -31,6 +31,7 @@
 #include "miosfs2.h"
 #include "miosfs2_disk.h"
 #include "gui.h"
+#include "framebuffer.h"
 /* Limites del kernel definidos en linker.ld */
 extern char __kernel_start[];
 extern char __kernel_end[];
@@ -1018,6 +1019,7 @@ imprimir("fs2block0\n");
 imprimir("fs2reserve0\n");
 imprimir("fs2free0\n");
 imprimir("gui\n");
+imprimir("fbcheck\n");
 } else if (iguales(linea, "clear")) {
     limpiar_pantalla();
 }
@@ -5272,6 +5274,53 @@ else if (iguales(linea, "fs2free0")) {
 else if (iguales(linea, "gui")) {
     gui_open();
 }
+
+else if (iguales(linea, "fbcheck")) {
+    const MiosFramebufferInfo *fb =
+        framebuffer_get_info();
+
+    imprimir("=== MIOS FRAMEBUFFER ===\n");
+
+    if (!fb->available) {
+        imprimir("Framebuffer: NO DISPONIBLE\n");
+        imprimir("Multiboot no entrego datos graficos.\n");
+        imprimir("Modo VGA texto: conservado.\n");
+    } else {
+        imprimir("Framebuffer: DETECTADO\n");
+
+        imprimir("Direccion baja: ");
+        imprimir_hex32(fb->address_low);
+        imprimir("\n");
+
+        imprimir("Direccion alta: ");
+        imprimir_hex32(fb->address_high);
+        imprimir("\n");
+
+        imprimir("Ancho: ");
+        imprimir_hex32(fb->width);
+        imprimir("\n");
+
+        imprimir("Alto: ");
+        imprimir_hex32(fb->height);
+        imprimir("\n");
+
+        imprimir("Pitch: ");
+        imprimir_hex32(fb->pitch);
+        imprimir("\n");
+
+        imprimir("Bits por pixel: ");
+        imprimir_hex32(fb->bpp);
+        imprimir("\n");
+
+        imprimir("Tipo: ");
+        imprimir_hex32(fb->type);
+        imprimir("\n");
+
+        imprimir("Framebuffer detectado, no mapeado.\n");
+        imprimir("FB CHECK: OK\n");
+    }
+}
+
     else {
         color = 0x0C; imprimir("Comando desconocido: "); imprimir(linea);
         imprimir("\nEscribe help para ver los comandos.\n"); color = 0x0F;
@@ -5371,6 +5420,7 @@ else if (shift && mapa_shift[codigo]) {
 void kernel_main(uint32_t multiboot_magic,
     uint32_t multiboot_info) {
         mbi_saved_address = multiboot_info;
+        framebuffer_probe(multiboot_magic, multiboot_info);
             memory_map_init(multiboot_magic, multiboot_info);
             int pmm_status = pmm_init();
 (void)pmm_status;
