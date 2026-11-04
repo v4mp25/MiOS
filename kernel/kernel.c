@@ -36,6 +36,7 @@
 #include "serial.h"
 #include "fb_draw.h"
 #include "ps2_input.h"
+#include "mouse.h"
 /*
  * 1 = demostracion grafica automatica.
  * 0 = arranque normal de MiOS.
@@ -5477,6 +5478,45 @@ else if (shift && mapa_shift[codigo]) {
     return c;
 }
 
+/*
+ * MiOS Desktop 0.5C
+ *
+ * Determinar si el raton ha pulsado
+ * una opcion del menu lateral.
+ *
+ * Devuelve:
+ *  0..4 = ventana seleccionada
+ *  -1   = fuera de los botones
+ */
+static int desktop_mouse_hit(
+    int32_t x,
+    int32_t y
+) {
+    const int32_t menu_x = 30;
+    const int32_t menu_width = 112;
+
+    const int32_t first_y = 136;
+    const int32_t step = 54;
+    const int32_t button_height = 43;
+
+    if (x < menu_x ||
+        x >= menu_x + menu_width) {
+        return -1;
+    }
+
+    for (int i = 0; i < 5; i++) {
+        int32_t top = first_y + i * step;
+
+        if (y >= top &&
+            y < top + button_height) {
+            return i;
+        }
+    }
+
+    return -1;
+}
+
+
 void kernel_main(uint32_t multiboot_magic,
     uint32_t multiboot_info) {
         
@@ -5614,6 +5654,15 @@ if (!framebuffer_map_ready()) {
  * pero no iniciamos la consola VGA.
  */
 
+serial_write("Inicializando raton PS/2...\n");
+
+if (mouse_init() == 0) {
+    serial_write("MOUSE PS2: OK\n");
+} else {
+    serial_write("MOUSE PS2: ERROR\n");
+    serial_write("Continuando con teclado.\n");
+}
+
 serial_write("MiOS Desktop interactivo.\n");
 
 /* Ventana seleccionada */
@@ -5637,6 +5686,7 @@ if (fb_desktop_draw_live(desktop_window) != 0) {
  */
 
 for (;;) {
+     int redraw = 0;
     uint8_t code = 0;
 
     /*
@@ -5650,15 +5700,165 @@ for (;;) {
         continue;
     }
 
+/*
+ * Diagnostico temporal del teclado.
+ */
+if (device == PS2_INPUT_KEYBOARD) {
+    serial_write("PS2 KEYBOARD: ");
+    serial_write_hex32((uint32_t)code);
+    serial_write("\n");
+}
+
     /*
      * Los datos del raton no deben
      * interpretarse como teclado.
      *
      * Todavia no activamos el raton.
      */
-    if (device == PS2_INPUT_MOUSE) {
+    
+if (device == PS2_INPUT_MOUSE) {
+    static uint32_t mouse_samples = 0;
+    static uint8_t old_left = 0;
+
+    MouseState state;
+
+    mouse_handle_byte(code);
+    mouse_get_state(&state);
+    
+static uint32_t last_packet = 0;
+
+if (!state.available)
+    continue;
+
+if (state.packet_count == last_packet)
+    continue;
+
+last_packet = state.packet_count;
+
+/*
+ * Redibujar el escritorio
+ * y colocar el cursor encima.
+ */
+fb_cursor_show(
+    (int)state.x,
+    (int)state.y
+);
+/*if (fb_desktop_draw_live(desktop_window) == 0) {
+    fb_draw_cursor(
+        (int)state.x,
+        (int)state.y
+    );
+}*/
+
+
+    if (!state.available)
         continue;
+
+    /*
+     * Mostrar una muestra cada
+     * 32 bytes recibidos, sin
+     * inundar el puerto serie.
+     */
+    mouse_samples++;
+
+    if ((mouse_samples % 32U) == 0U) {
+        serial_write("MOUSE X: ");
+        serial_write_hex32((uint32_t)state.x);
+
+        serial_write(" Y: ");
+        serial_write_hex32((uint32_t)state.y);
+
+        serial_write("\n");
     }
+
+    /* Detectar una nueva pulsacion */
+   
+if (state.left && !old_left) {
+
+    serial_write("MOUSE: CLICK IZQUIERDO\n");
+
+    serial_write("CLICK X: ");
+    serial_write_hex32((uint32_t)state.x);
+
+    serial_write(" Y: ");
+    serial_write_hex32((uint32_t)state.y);
+
+    serial_write("\n");
+
+    /*
+     * Averiguar si se pulso
+     * una opcion del menu.
+     */
+    int selected = desktop_mouse_hit(
+        state.x,
+        state.y
+    );
+
+    if (selected >= 0) {
+fb_cursor_hide();
+
+desktop_window = (uint32_t)selected;
+
+if (fb_desktop_draw_live(desktop_window) == 0) {
+    fb_cursor_show(
+        (int)state.x,
+        (int)state.y
+    );
+}
+if (redraw) {
+    MouseState current_mouse;
+    mouse_get_state(&current_mouse);
+
+    fb_cursor_hide();
+
+    if (fb_desktop_draw_live(desktop_window) != 0) {
+        serial_write("ERROR: cambio de ventana.\n");
+    }
+
+    if (current_mouse.available) {
+        fb_cursor_show(
+            (int)current_mouse.x,
+            (int)current_mouse.y
+        );
+    }
+}
+        desktop_window =
+            (uint32_t)selected;
+
+        serial_write("MENU: ventana ");
+        serial_write_hex32(desktop_window);
+        serial_write("\n");
+
+        /*
+         * Actualizar inmediatamente
+         * el escritorio.
+         */
+        if (fb_desktop_draw_live(
+                desktop_window
+            ) != 0) {
+
+            serial_write(
+                "ERROR: redibujando ventana\n"
+            );
+
+        } else {
+            serial_write(
+                "MOUSE: VENTANA ACTUALIZADA\n"
+            );
+        }
+
+    } else {
+        serial_write(
+            "MOUSE: CLICK FUERA DEL MENU\n"
+        );
+    }
+}
+
+
+    old_left = state.left;
+    continue;
+}
+
 
     if (device != PS2_INPUT_KEYBOARD) {
         continue;
@@ -5679,7 +5879,7 @@ for (;;) {
         continue;
     }
 
-    int redraw = 0;
+   
 
     if (desktop_extended) {
         desktop_extended = 0;

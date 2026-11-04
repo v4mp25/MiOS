@@ -13,15 +13,16 @@ typedef struct {
     uint8_t middle;
 
     uint8_t available;
+    uint32_t packet_count;
 } MouseState;
 
-/* Inicializar el dispositivo PS/2 */
+/* Inicializa el raton PS/2 */
 int mouse_init(void);
 
-/* Consultar posicion y botones */
-void mouse_get_state(MouseState *state);
-
-/* Procesar un byte recibido del raton */
+/* Procesa un byte del raton */
 void mouse_handle_byte(uint8_t data);
+
+/* Devuelve el estado mas reciente */
+void mouse_get_state(MouseState *state);
 
 #endif

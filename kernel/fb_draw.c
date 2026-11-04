@@ -974,3 +974,165 @@ int fb_desktop_draw_live(uint32_t window) {
 
     return 0;
 }
+
+/*
+ * MiOS Desktop 0.5B
+ *
+ * Cursor grafico sencillo.
+ * Se dibuja sobre el escritorio.
+ */
+void fb_draw_cursor(int x, int y) {
+    /*
+     * Puntero blanco de 12x18.
+     * El borde oscuro facilita
+     * verlo sobre fondos claros.
+     */
+    for (int row = 0; row < 18; row++) {
+        int width = row / 2 + 1;
+
+        if (width > 10)
+            width = 10;
+
+        for (int col = 0; col < width; col++) {
+            int px = x + col;
+            int py = y + row;
+
+            if (px < 0 || px >= 640 ||
+                py < 0 || py >= 480)
+                continue;
+
+            int border =
+                col == 0 ||
+                col == width - 1 ||
+                row == 0 ||
+                row == 17;
+
+            if (border) {
+                fb_draw_rect(
+                    px, py, 1, 1,
+                    10, 20, 30
+                );
+            } else {
+                fb_draw_rect(
+                    px, py, 1, 1,
+                    255, 255, 255
+                );
+            }
+        }
+    }
+}
+
+/*
+ * Leer y escribir pixeles sin
+ * convertir los canales RGB.
+ *
+ * Usamos el formato nativo del
+ * framebuffer de 32 bits.
+ */
+uint32_t fb_read_pixel(int x, int y) {
+    const MiosFramebufferInfo *fb =
+    framebuffer_get_info();
+
+    if (!fb || !fb_video)
+        return 0;
+
+    if (x < 0 || y < 0 ||
+        (uint32_t)x >= fb->width ||
+        (uint32_t)y >= fb->height)
+        return 0;
+
+    volatile uint32_t *pixel =
+        (volatile uint32_t *)(void *)(
+            fb_video +
+            (uint32_t)y * fb->pitch +
+            (uint32_t)x * 4U
+        );
+
+    return *pixel;
+}
+
+void fb_write_pixel_raw(
+    int x,
+    int y,
+    uint32_t pixel
+) {
+   const MiosFramebufferInfo *fb =
+    framebuffer_get_info();
+
+    if (!fb || !fb_video)
+        return;
+
+    if (x < 0 || y < 0 ||
+        (uint32_t)x >= fb->width ||
+        (uint32_t)y >= fb->height)
+        return;
+
+    volatile uint32_t *destination =
+        (volatile uint32_t *)(void *)(
+            fb_video +
+            (uint32_t)y * fb->pitch +
+            (uint32_t)x * 4U
+        );
+
+    *destination = pixel;
+}
+
+#define CURSOR_W 12
+#define CURSOR_H 18
+
+static uint32_t cursor_background[
+    CURSOR_W * CURSOR_H
+];
+
+static int cursor_old_x = 0;
+static int cursor_old_y = 0;
+static int cursor_visible = 0;
+
+/*
+ * Restaurar el fondo que existia
+ * antes de dibujar el cursor.
+ */
+void fb_cursor_hide(void) {
+    if (!cursor_visible)
+        return;
+
+    for (int y = 0; y < CURSOR_H; y++) {
+        for (int x = 0; x < CURSOR_W; x++) {
+            fb_write_pixel_raw(
+                cursor_old_x + x,
+                cursor_old_y + y,
+                cursor_background[
+                    y * CURSOR_W + x
+                ]
+            );
+        }
+    }
+
+    cursor_visible = 0;
+}
+
+/*
+ * Mostrar cursor en una posicion.
+ * No redibuja todo el escritorio.
+ */
+void fb_cursor_show(int x, int y) {
+    fb_cursor_hide();
+
+    for (int row = 0; row < CURSOR_H; row++) {
+        for (int col = 0; col < CURSOR_W; col++) {
+            cursor_background[
+                row * CURSOR_W + col
+            ] = fb_read_pixel(
+                x + col,
+                y + row
+            );
+        }
+    }
+
+    cursor_old_x = x;
+    cursor_old_y = y;
+
+    fb_draw_cursor(x, y);
+
+    cursor_visible = 1;
+}

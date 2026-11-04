@@ -47,4 +47,9 @@ int fb_desktop_draw(uint32_t window);
  * reales al kernel.
  */
 int fb_desktop_draw_live(uint32_t window);
+void fb_draw_cursor(int x, int y);
+uint32_t fb_read_pixel(int x, int y);
+void fb_write_pixel_raw(int x, int y, uint32_t pixel);
+void fb_cursor_hide(void);
+void fb_cursor_show(int x, int y);
 #endif
