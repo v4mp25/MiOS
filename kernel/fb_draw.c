@@ -6,6 +6,7 @@
 #include "framebuffer.h"
 #include "paging.h"
 #include "serial.h"
+#include "fb_text.h"
 static const MiosFramebufferInfo *fb = NULL;
 static volatile uint8_t *fb_video = NULL;
 
@@ -334,6 +335,69 @@ int fb_draw_demo(void) {
         380, 320, 112, 42,
         0, 125, 173
     );
+
+    /*
+     * MIOS DESKTOP 0.4D.1
+     * Primeras letras graficas.
+     */
+
+    /* Nombre del sistema en barra superior */
+    if (fb_text_draw(
+            20, 18,
+            "MIOS DESKTOP",
+            2,
+            255, 255, 255
+        ) != 0) {
+        return -1;
+    }
+
+    /* Titulo de la ventana */
+    if (fb_text_draw(
+            130, 110,
+            "VENTANA GRAFICA",
+            2,
+            255, 255, 255
+        ) != 0) {
+        return -1;
+    }
+
+    /* Informacion del sistema */
+    if (fb_text_draw(
+            140, 168,
+            "KERNEL X86 32 BIT",
+            2,
+            25, 55, 85
+        ) != 0) {
+        return -1;
+    }
+
+    if (fb_text_draw(
+            140, 203,
+            "FRAMEBUFFER RGB OK",
+            2,
+            25, 55, 85
+        ) != 0) {
+        return -1;
+    }
+
+    if (fb_text_draw(
+            140, 238,
+            "PAGINACION ACTIVA",
+            2,
+            25, 55, 85
+        ) != 0) {
+        return -1;
+    }
+
+    /* Texto del boton */
+    if (fb_text_draw(
+            423, 333,
+            "OK",
+            2,
+            255, 255, 255
+        ) != 0) {
+        return -1;
+    }
 
     return 0;
 }
