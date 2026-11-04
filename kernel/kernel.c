@@ -35,6 +35,7 @@
 #include "graphics.h"
 #include "serial.h"
 #include "fb_draw.h"
+#include "ps2_input.h"
 /*
  * 1 = demostracion grafica automatica.
  * 0 = arranque normal de MiOS.
@@ -5634,14 +5635,37 @@ if (fb_desktop_draw_live(desktop_window) != 0) {
  * Utiliza el teclado PS/2 directamente,
  * sin iniciar la consola VGA.
  */
+
 for (;;) {
-    /* Sin datos del teclado */
-    if ((inb(0x64) & 0x01U) == 0U) {
+    uint8_t code = 0;
+
+    /*
+     * Leer el controlador PS/2
+     * identificando el dispositivo.
+     */
+    int device = ps2_input_read(&code);
+
+    if (device == PS2_INPUT_NONE) {
         __asm__ volatile("pause");
         continue;
     }
 
-    uint8_t code = inb(0x60);
+    /*
+     * Los datos del raton no deben
+     * interpretarse como teclado.
+     *
+     * Todavia no activamos el raton.
+     */
+    if (device == PS2_INPUT_MOUSE) {
+        continue;
+    }
+
+    if (device != PS2_INPUT_KEYBOARD) {
+        continue;
+    }
+
+    /* Prefijo de tecla extendida */
+    
 
     /* Prefijo de tecla extendida */
     if (code == 0xE0U) {

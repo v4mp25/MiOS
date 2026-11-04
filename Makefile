@@ -100,8 +100,8 @@ elf_disk.o: kernel/elf_disk.c include/elf_disk.h include/ata.h include/irq.h
 	$(CC) $(CFLAGS) -c kernel/elf_disk.c -o elf_disk.o
 
 
-kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o fb_text.o fb_draw.o gui.o serial.o framebuffer.o graphics.o gui_files.o memory.o miosfs2.o miosfs2_disk.o miosfs2_bitmap.o binfs_consistency.o binfs_mirror.o binfs_verify.o elf_exec.o elf_disk.o binfs.o elf_loader.o elf32.o user_process.o user_scheduler.o memory_map.o user_tasks.o ring3.o user_program.o thread.o syscall.o user_copy.o tss.o user_context.o address_space.o pmm.o thread_switch.o gdt.o hola_elf.o gdt_flush.o paging.o process.o kernel/linker.ld
-	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o fb_text.o fb_draw.o serial.o kernel.o gui_files.o graphics.o framebuffer.o gui.o miosfs2.o miosfs2_disk.o miosfs2_bitmap.o binfs.o binfs_consistency.o binfs_verify.o binfs_mirror.o elf_exec.o elf_disk.o user_process.o elf_loader.o elf32.o user_scheduler.o user_tasks.o fs.o ring3.o ata.o user_program.o interrupts.o user_copy.o interrupts_c.o syscall.o tss.o memory.o user_context.o gdt.o gdt_flush.o paging.o hola_elf.o memory_map.o address_space.o pmm.o thread.o thread_switch.o process.o
+kernel.bin: boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o ps2_input.o fb_text.o fb_draw.o gui.o serial.o framebuffer.o graphics.o gui_files.o memory.o miosfs2.o miosfs2_disk.o miosfs2_bitmap.o binfs_consistency.o binfs_mirror.o binfs_verify.o elf_exec.o elf_disk.o binfs.o elf_loader.o elf32.o user_process.o user_scheduler.o memory_map.o user_tasks.o ring3.o user_program.o thread.o syscall.o user_copy.o tss.o user_context.o address_space.o pmm.o thread_switch.o gdt.o hola_elf.o gdt_flush.o paging.o process.o kernel/linker.ld
+	$(LD) $(LDFLAGS) -T kernel/linker.ld -o kernel.bin boot.o fb_text.o ps2_input.o fb_draw.o serial.o kernel.o gui_files.o graphics.o framebuffer.o gui.o miosfs2.o miosfs2_disk.o miosfs2_bitmap.o binfs.o binfs_consistency.o binfs_verify.o binfs_mirror.o elf_exec.o elf_disk.o user_process.o elf_loader.o elf32.o user_scheduler.o user_tasks.o fs.o ring3.o ata.o user_program.o interrupts.o user_copy.o interrupts_c.o syscall.o tss.o memory.o user_context.o gdt.o gdt_flush.o paging.o hola_elf.o memory_map.o address_space.o pmm.o thread.o thread_switch.o process.o
 
 os.iso: kernel.bin boot/grub/grub.cfg
 	mkdir -p iso/boot/grub
@@ -118,7 +118,7 @@ run: os.iso
 		-boot order=d \
 		-m 128M
 clean:
-	rm -f boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o fb_draw.o fb_text.o gui.o serial.o graphics.o framebuffer.o gui_files.o miosfs2.o miosfs2_disk.o miosfs2_bitmap.o elf_exec.o binfs_consistency.o binfs_mirror.o user_copy.o binfs_verify.o user_process.o binfs.o elf_disk.o elf32.o elf_loader.o user_scheduler.o user_context.o user_tasks.o memory.o ring3.o user_program.o gdt.o syscall.o tss.o gdt_flush.o paging.o thread.o address_space.o thread_switch.o process.o kernel.bin os.iso memory_map.o user/hola.o user/hola.elf hola_elf.o
+	rm -f boot.o kernel.o fs.o ata.o interrupts.o interrupts_c.o ps2_input.o fb_draw.o fb_text.o gui.o serial.o graphics.o framebuffer.o gui_files.o miosfs2.o miosfs2_disk.o miosfs2_bitmap.o elf_exec.o binfs_consistency.o binfs_mirror.o user_copy.o binfs_verify.o user_process.o binfs.o elf_disk.o elf32.o elf_loader.o user_scheduler.o user_context.o user_tasks.o memory.o ring3.o user_program.o gdt.o syscall.o tss.o gdt_flush.o paging.o thread.o address_space.o thread_switch.o process.o kernel.bin os.iso memory_map.o user/hola.o user/hola.elf hola_elf.o
 	rm -rf iso/boot
 interrupts.o: boot/interrupts.asm
 	$(ASM) -f elf32 boot/interrupts.asm -o interrupts.o
@@ -141,6 +141,10 @@ gdt.o: kernel/gdt.c include/gdt.h include/tss.h
 
 fb_draw.o: kernel/fb_draw.c include/fb_draw.h include/fb_text.h include/framebuffer.h include/paging.h include/process.h include/pmm.h include/binfs.h
 	$(CC) $(CFLAGS) -c kernel/fb_draw.c -o fb_draw.o
+
+ps2_input.o: drivers/ps2_input.c include/ps2_input.h
+	$(CC) $(CFLAGS) -c drivers/ps2_input.c -o ps2_input.o
+
 
 
 
