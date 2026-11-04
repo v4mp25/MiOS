@@ -128,7 +128,7 @@ pmm.o: kernel/pmm.c include/pmm.h include/memory_map.h
 	$(CC) $(CFLAGS) -c kernel/pmm.c -o pmm.o
 miosfs2.o: fs/miosfs2.c include/miosfs2.h
 	$(CC) $(CFLAGS) -c fs/miosfs2.c -o miosfs2.o
-paging.o: kernel/paging.c include/paging.h include/pmm.h include/irq.h
+paging.o: kernel/paging.c include/paging.h include/pmm.h include/irq.h include/framebuffer.h
 	$(CC) $(CFLAGS) -c kernel/paging.c -o paging.o
 
 gdt.o: kernel/gdt.c include/gdt.h include/tss.h

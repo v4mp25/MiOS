@@ -3,6 +3,7 @@
 #include "paging.h"
 #include "pmm.h"
 #include "irq.h"
+#include "framebuffer.h"
 /*
  * MiOS - Preparacion de paginacion x86
  *
@@ -884,4 +885,188 @@ cleanup:
     }
 
     return result;
+}
+
+/*
+ * MiOS Desktop 0.4C.3
+ *
+ * Mapeo independiente de framebuffer.
+ *
+ * Directorio: indice 896
+ * Virtual: 0xE0000000
+ *
+ * Se prepara ANTES de activar
+ * la paginacion.
+ *
+ * No reserva marcos de RAM mediante PMM.
+ */
+
+#define FB_PDE_INDEX 896U
+#define FB_MAX_PAGES 1024U
+
+#define FB_PAGE_PRESENT 0x001U
+#define FB_PAGE_WRITE   0x002U
+#define FB_PAGE_PWT     0x008U
+#define FB_PAGE_PCD     0x010U
+
+static uint32_t fb_page_table[1024]
+    __attribute__((aligned(4096)));
+
+static int fb_mapping_ready = 0;
+
+static uint32_t fb_virtual_address = 0U;
+static uint32_t fb_mapping_size = 0U;
+
+int framebuffer_map_prepare(void) {
+    /*
+     * Esta funcion se ejecuta una vez
+     * durante la inicializacion.
+     */
+    if (!initialized ||
+        paging_cpu_enabled() ||
+        fb_mapping_ready) {
+        return -1;
+    }
+
+    const MiosFramebufferInfo *fb =
+        framebuffer_get_info();
+
+    if (fb == 0 || !fb->available)
+        return -1;
+
+    /*
+     * Exigir framebuffer RGB
+     * de 32 bits.
+     */
+    if (fb->type != 1U ||
+        fb->bpp != 32U ||
+        fb->address_high != 0U ||
+        fb->address_low == 0U) {
+        return -1;
+    }
+
+    /*
+     * Comprobar dimensiones y pitch.
+     * No aceptar una fila mas pequena
+     * que sus pixeles visibles.
+     */
+    if (fb->width == 0U ||
+        fb->height == 0U ||
+        fb->pitch == 0U) {
+        return -1;
+    }
+
+    if ((uint64_t)fb->pitch <
+        (uint64_t)fb->width * 4U) {
+        return -1;
+    }
+
+    /*
+     * Calcular el espacio real.
+     * El pitch puede ser mayor que
+     * width * 4.
+     */
+    uint64_t bytes =
+        (uint64_t)fb->pitch *
+        (uint64_t)fb->height;
+
+    uint32_t offset =
+        fb->address_low & 0xFFFU;
+
+    uint64_t span = bytes + offset;
+
+    uint64_t pages =
+        (span + PAGE_SIZE - 1U) /
+        PAGE_SIZE;
+
+    /*
+     * Un PDE normal cubre 4 MiB.
+     */
+    if (bytes == 0U ||
+        pages == 0U ||
+        pages > FB_MAX_PAGES) {
+        return -1;
+    }
+
+    uint32_t physical_base =
+        fb->address_low & 0xFFFFF000U;
+
+    /*
+     * No permitir desbordamiento
+     * de la direccion fisica de 32 bits.
+     */
+    if ((uint64_t)physical_base +
+        pages * PAGE_SIZE >
+        0x100000000ULL) {
+        return -1;
+    }
+
+    /*
+     * No sobrescribir una region
+     * virtual que ya este ocupada.
+     */
+    if (page_directory[FB_PDE_INDEX] != 0U)
+        return -1;
+
+    for (uint32_t i = 0; i < 1024U; i++) {
+        fb_page_table[i] = 0U;
+    }
+
+    /*
+     * Mapear memoria de dispositivo
+     * como supervisor y escribible,
+     * con cache deshabilitada.
+     */
+    for (uint32_t i = 0;
+         i < (uint32_t)pages;
+         i++) {
+
+        uint32_t physical =
+            physical_base + i * PAGE_SIZE;
+
+        fb_page_table[i] =
+            physical |
+            FB_PAGE_PRESENT |
+            FB_PAGE_WRITE |
+            FB_PAGE_PWT |
+            FB_PAGE_PCD;
+    }
+
+    /*
+     * Publicar el directorio
+     * solamente al finalizar
+     * todas las comprobaciones.
+     */
+    page_directory[FB_PDE_INDEX] =
+        ((uint32_t)(uintptr_t)
+            &fb_page_table[0]) |
+        FB_PAGE_PRESENT |
+        FB_PAGE_WRITE;
+
+    fb_virtual_address =
+        MIOS_FB_VADDR + offset;
+
+    fb_mapping_size = (uint32_t)bytes;
+
+    fb_mapping_ready = 1;
+
+    return 0;
+}
+
+int framebuffer_map_ready(void) {
+    return fb_mapping_ready;
+}
+
+uint32_t framebuffer_map_address(void) {
+    if (!fb_mapping_ready)
+        return 0U;
+
+    return fb_virtual_address;
+}
+
+uint32_t framebuffer_map_size(void) {
+    if (!fb_mapping_ready)
+        return 0U;
+
+    return fb_mapping_size;
 }

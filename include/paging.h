@@ -49,5 +49,25 @@ int paging_write_protect_enabled(void);
 int paging_address_spaces_test(void);
 /* Prueba real de cambio de directorios CR3 */
 int paging_cr3_switch_test(void);
+
+/*
+ * Framebuffer del kernel.
+ *
+ * Direccion virtual reservada:
+ * 0xE0000000
+ *
+ * Mapeo preparado antes de activar
+ * la paginacion.
+ */
+#define MIOS_FB_VADDR 0xE0000000U
+
+int framebuffer_map_prepare(void);
+
+int framebuffer_map_ready(void);
+
+uint32_t framebuffer_map_address(void);
+
+uint32_t framebuffer_map_size(void);
+
 #endif
 

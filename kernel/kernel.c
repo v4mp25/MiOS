@@ -5522,8 +5522,34 @@ if (!boot_fb->available) {
             memory_map_init(multiboot_magic, multiboot_info);
             int pmm_status = pmm_init();
 (void)pmm_status;
+
 paging_init();
+
+/*
+ * Preparar la region grafica antes
+ * de activar la paginacion.
+ */
+if (framebuffer_map_prepare() == 0) {
+    serial_write("FB MAP: PREPARADO\n");
+
+    serial_write("Virtual: ");
+    serial_write_hex32(
+        framebuffer_map_address()
+    );
+    serial_write("\n");
+
+    serial_write("Bytes: ");
+    serial_write_hex32(
+        framebuffer_map_size()
+    );
+    serial_write("\n");
+
+} else {
+    serial_write("FB MAP: NO DISPONIBLE\n");
+}
+
 as_init();
+
     mios_fs_init();
     memory_init();
     thread_init();
