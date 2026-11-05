@@ -6035,12 +6035,404 @@ static void mios_network_detect(void)
     serial_write("NET: RTL8139 NO ENCONTRADA\n");
 }
 
+/* ===== MiOS Network 0.2 - RTL8139 ===== */
+
+static uint16_t rtl8139_io_base = 0;
+/* RTL8139 - Buffers para DMA */
+
+/* Recepcion: 8 KB + margen requerido */
+static uint8_t rtl_rx_buffer[12288]
+    __attribute__((aligned(4096)));
+
+/* Transmision: una trama Ethernet */
+static uint8_t rtl_tx_buffer[2048]
+    __attribute__((aligned(4096)));
+static uint8_t rtl8139_in8(uint16_t port)
+{
+    uint8_t value;
+
+    __asm__ volatile(
+        "inb %w1, %0"
+        : "=a"(value)
+        : "Nd"(port)
+    );
+
+    return value;
+}
+
+static void rtl8139_out8(uint16_t port, uint8_t value)
+{
+    __asm__ volatile(
+        "outb %0, %w1"
+        :
+        : "a"(value), "Nd"(port)
+    );
+}
+
+static void rtl8139_out16(uint16_t port, uint16_t value)
+{
+    __asm__ volatile(
+        "outw %w0, %w1"
+        :
+        : "a"(value), "Nd"(port)
+    );
+}
+
+static void rtl8139_pci_enable(
+    uint8_t slot,
+    uint8_t func,
+    uint16_t command)
+{
+    uint32_t address =
+        0x80000000U |
+        ((uint32_t)slot << 11) |
+        ((uint32_t)func << 8) |
+        0x04U;
+
+    __asm__ volatile(
+        "outl %0, %w1"
+        :
+        : "a"(address), "Nd"((uint16_t)0xCF8)
+    );
+
+    __asm__ volatile(
+        "outw %w0, %w1"
+        :
+        : "a"(command), "Nd"((uint16_t)0xCFC)
+    );
+}
+
+static int rtl8139_init_basic(void)
+{
+    serial_write("RTL8139: Inicializando...\n");
+
+    for (uint32_t slot = 0; slot < 32; slot++) {
+        for (uint32_t func = 0; func < 8; func++) {
+
+            uint32_t id = net_pci_read(
+                0, (uint8_t)slot,
+                (uint8_t)func, 0
+            );
+
+            if ((uint16_t)id != 0x10EC ||
+                (uint16_t)(id >> 16) != 0x8139)
+                continue;
+
+            uint32_t bar = net_pci_read(
+                0, (uint8_t)slot,
+                (uint8_t)func, 0x10
+            );
+
+            if ((bar & 1U) == 0) {
+                serial_write("RTL8139: BAR0 no es IO\n");
+                return -1;
+            }
+
+            rtl8139_io_base =
+                (uint16_t)(bar & ~3U);
+
+            if (rtl8139_io_base == 0)
+                return -1;
+
+            serial_write("RTL8139: IO BASE = ");
+            serial_write_hex32(rtl8139_io_base);
+            serial_write("\n");
+
+            /* Activar IO y PCI Bus Master */
+            uint32_t pci_command = net_pci_read(
+                0, (uint8_t)slot,
+                (uint8_t)func, 0x04
+            );
+
+            rtl8139_pci_enable(
+                (uint8_t)slot,
+                (uint8_t)func,
+                (uint16_t)(pci_command | 0x0005U)
+            );
+
+            /* Encender y reiniciar la tarjeta */
+            rtl8139_out8(rtl8139_io_base + 0x52, 0);
+            rtl8139_out8(rtl8139_io_base + 0x37, 0x10);
+
+            uint32_t timeout = 1000000;
+
+            while (timeout-- > 0) {
+                if (!(rtl8139_in8(
+                        rtl8139_io_base + 0x37) & 0x10))
+                    break;
+            }
+
+            if (rtl8139_in8(
+                    rtl8139_io_base + 0x37) & 0x10) {
+                serial_write("RTL8139: RESET ERROR\n");
+                return -1;
+            }
+
+            /* Sin interrupciones: usaremos polling */
+            rtl8139_out16(
+                rtl8139_io_base + 0x3C, 0
+            );
+
+            serial_write("RTL8139: RESET OK\n");
+
+            /* Leer direccion MAC */
+            serial_write("RTL8139: MAC BYTES:\n");
+
+            for (int i = 0; i < 6; i++) {
+                serial_write_hex32(
+                    rtl8139_in8(
+                        rtl8139_io_base + (uint16_t)i
+                    )
+                );
+                serial_write("\n");
+            }
+
+            serial_write("RTL8139: HARDWARE LISTO\n");
+            return 0;
+        }
+    }
+
+    serial_write("RTL8139: NO ENCONTRADA\n");
+    return -1;
+}
+
+/* ===== MiOS Network 0.2C: DMA + ARP ===== */
+
+static void rtl8139_out32(uint16_t port, uint32_t value)
+{
+    __asm__ volatile(
+        "outl %0, %w1"
+        :
+        : "a"(value), "Nd"(port)
+    );
+}
+
+static uint32_t rtl8139_in32(uint16_t port)
+{
+    uint32_t value;
+
+    __asm__ volatile(
+        "inl %w1, %0"
+        : "=a"(value)
+        : "Nd"(port)
+    );
+
+    return value;
+}
+
+static int rtl8139_dma_arp_test(void)
+{
+    if (rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    /*
+     * En MiOS, el kernel utiliza un mapeo
+     * de identidad para los primeros 128 MiB.
+     */
+    uint32_t rx_phys =
+        (uint32_t)(uintptr_t)&rtl_rx_buffer[0];
+
+    uint32_t tx_phys =
+        (uint32_t)(uintptr_t)&rtl_tx_buffer[0];
+
+    if ((rx_phys & 4095U) != 0 ||
+        (tx_phys & 4095U) != 0 ||
+        rx_phys >= 0x08000000U - sizeof(rtl_rx_buffer) ||
+        tx_phys >= 0x08000000U - sizeof(rtl_tx_buffer))
+    {
+        serial_write("NET: DMA ADDRESS ERROR\n");
+        return -1;
+    }
+
+    /* Inicializar buffers */
+    for (uint32_t i = 0; i < sizeof(rtl_rx_buffer); i++)
+        rtl_rx_buffer[i] = 0;
+
+    for (uint32_t i = 0; i < sizeof(rtl_tx_buffer); i++)
+        rtl_tx_buffer[i] = 0;
+
+    /* Mantener interrupciones de red desactivadas */
+    rtl8139_out16(io + 0x3C, 0);
+    rtl8139_out16(io + 0x3E, 0xFFFF);
+
+    /* Configurar el buffer de recepcion */
+    rtl8139_out32(io + 0x30, rx_phys);
+    rtl8139_out16(io + 0x38, 0xFFF0);
+
+    /*
+     * RX: 8 KiB, WRAP habilitado,
+     * aceptar broadcast y MAC propia.
+     */
+    rtl8139_out32(io + 0x44, 0x0000008AU);
+
+    /* Activar RX y TX */
+    rtl8139_out8(io + 0x37, 0x0C);
+
+    if ((rtl8139_in8(io + 0x37) & 0x0CU) != 0x0CU) {
+        serial_write("NET: RX/TX ENABLE ERROR\n");
+        return -1;
+    }
+
+    serial_write("NET: DMA RX/TX CONFIGURADO\n");
+
+    /*
+     * Construir una solicitud ARP:
+     * ¿Quien tiene 10.0.2.2?
+     *
+     * IP experimental MiOS: 10.0.2.15
+     */
+
+    for (int i = 0; i < 6; i++) {
+        uint8_t mac = rtl8139_in8(io + (uint16_t)i);
+
+        rtl_tx_buffer[i] = 0xFF;
+        rtl_tx_buffer[6 + i] = mac;
+        rtl_tx_buffer[22 + i] = mac;
+    }
+
+    /* EtherType ARP */
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x06;
+
+    /* Hardware Ethernet */
+    rtl_tx_buffer[14] = 0x00;
+    rtl_tx_buffer[15] = 0x01;
+
+    /* Protocolo IPv4 */
+    rtl_tx_buffer[16] = 0x08;
+    rtl_tx_buffer[17] = 0x00;
+
+    /* Longitudes MAC e IP */
+    rtl_tx_buffer[18] = 6;
+    rtl_tx_buffer[19] = 4;
+
+    /* ARP Request */
+    rtl_tx_buffer[20] = 0;
+    rtl_tx_buffer[21] = 1;
+
+    /* IP de MiOS: 10.0.2.15 */
+    rtl_tx_buffer[28] = 10;
+    rtl_tx_buffer[29] = 0;
+    rtl_tx_buffer[30] = 2;
+    rtl_tx_buffer[31] = 15;
+
+    /* MAC destino ARP: 00:00:00:00:00:00 */
+
+    /* IP destino: 10.0.2.2 */
+    rtl_tx_buffer[38] = 10;
+    rtl_tx_buffer[39] = 0;
+    rtl_tx_buffer[40] = 2;
+    rtl_tx_buffer[41] = 2;
+
+    /* Asegurar que el buffer este listo para DMA */
+    __asm__ volatile("" ::: "memory");
+
+    /* Descriptor de transmision 0 */
+    rtl8139_out32(io + 0x20, tx_phys);
+
+    /* Enviar 60 bytes, sin incluir el CRC */
+    rtl8139_out32(io + 0x10, 60U);
+
+    int tx_ok = 0;
+
+    for (uint32_t i = 0; i < 5000000U; i++) {
+        uint32_t status = rtl8139_in32(io + 0x10);
+
+        if (status & 0x00008000U) {
+            tx_ok = 1;
+            break;
+        }
+    }
+
+    if (!tx_ok) {
+        serial_write("NET: ARP TX ERROR, TSD0=");
+        serial_write_hex32(rtl8139_in32(io + 0x10));
+        serial_write("\n");
+        return -1;
+    }
+
+    serial_write("NET: ARP REQUEST ENVIADA\n");
+    serial_write("NET: ESPERANDO RESPUESTA...\n");
+
+    uint32_t rx_offset = 0;
+
+    for (uint32_t wait = 0; wait < 10000000U; wait++) {
+
+        /* Bit BUFE = 1: aun no hay paquetes */
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        volatile uint8_t *packet =
+            (volatile uint8_t *)&rtl_rx_buffer[rx_offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 4 ||
+            length > 2048U ||
+            rx_offset + 4U + length > sizeof(rtl_rx_buffer))
+        {
+            serial_write("NET: RX PACKET ERROR\n");
+            return -1;
+        }
+
+        volatile uint8_t *frame = packet + 4;
+
+        /* Identificar respuesta ARP de 10.0.2.2 */
+        int arp_reply =
+            length >= 46 &&
+            frame[12] == 0x08 &&
+            frame[13] == 0x06 &&
+            frame[20] == 0x00 &&
+            frame[21] == 0x02 &&
+            frame[28] == 10 &&
+            frame[29] == 0 &&
+            frame[30] == 2 &&
+            frame[31] == 2;
+
+        /* Liberar el espacio usado en el anillo RX */
+        rx_offset =
+            (rx_offset + 4U + length + 3U) & ~3U;
+
+        rx_offset &= 8191U;
+
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(rx_offset - 16U)
+        );
+
+        /* Confirmar recepcion */
+        rtl8139_out16(io + 0x3E, 0x0001U);
+
+        if (arp_reply) {
+            serial_write(
+                "NET: RESPUESTA ARP 10.0.2.2 RECIBIDA!\n"
+            );
+            return 0;
+        }
+    }
+
+    serial_write("NET: SIN RESPUESTA ARP\n");
+    return -1;
+}
+
 void kernel_main(uint32_t multiboot_magic,
     uint32_t multiboot_info) {
         
 /* Consola de diagnostico independiente de VGA */
 serial_init();
 mios_network_detect();
+if (rtl8139_init_basic() == 0) {
+    rtl8139_dma_arp_test();
+}
 serial_write("\n");
 serial_write("=== MiOS SERIAL DEBUG ===\n");
 serial_write("Kernel iniciado.\n");
