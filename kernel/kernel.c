@@ -37,6 +37,7 @@
 #include "fb_draw.h"
 #include "ps2_input.h"
 #include "mouse.h"
+#include "fb_text.h"
 /*
  * 1 = demostracion grafica automatica.
  * 0 = arranque normal de MiOS.
@@ -5516,13 +5517,530 @@ static int desktop_mouse_hit(
     return -1;
 }
 
+/*
+ * MiOS Desktop 0.6
+ * Accesos directos del escritorio
+ */
+
+#define MIOS_APP_NONE      (-1)
+#define MIOS_APP_TERMINAL   5
+#define MIOS_APP_FILES      3
+
+/* ===== MiOS Desktop 0.6 - Terminal interactiva ===== */
+
+#define TERM_LINES 9
+#define TERM_COLS  54
+
+static char term_history[TERM_LINES][TERM_COLS];
+static int term_used = 0;
+
+static char term_input[48];
+static int term_len = 0;
+
+/* Teclado PS/2: scancodes Set 1 */
+static const char term_keys[0x3A] = {
+    [0x02]='1', [0x03]='2', [0x04]='3',
+    [0x05]='4', [0x06]='5', [0x07]='6',
+    [0x08]='7', [0x09]='8', [0x0A]='9',
+    [0x0B]='0', [0x0C]='-', [0x0D]='=',
+
+    [0x10]='Q', [0x11]='W', [0x12]='E',
+    [0x13]='R', [0x14]='T', [0x15]='Y',
+    [0x16]='U', [0x17]='I', [0x18]='O',
+    [0x19]='P',
+
+    [0x1E]='A', [0x1F]='S', [0x20]='D',
+    [0x21]='F', [0x22]='G', [0x23]='H',
+    [0x24]='J', [0x25]='K', [0x26]='L',
+
+    [0x2C]='Z', [0x2D]='X', [0x2E]='C',
+    [0x2F]='V', [0x30]='B', [0x31]='N',
+    [0x32]='M',
+
+    [0x33]=',', [0x34]='.',
+    [0x35]='/', [0x39]=' '
+};
+
+static int term_equals(const char *a, const char *b)
+{
+    while (*a && *b) {
+        if (*a != *b)
+            return 0;
+        a++;
+        b++;
+    }
+
+    return *a == *b;
+}
+
+static void term_print(const char *message)
+{
+    int row;
+
+    if (term_used < TERM_LINES) {
+        row = term_used++;
+    } else {
+        for (int i = 1; i < TERM_LINES; i++) {
+            for (int j = 0; j < TERM_COLS; j++)
+                term_history[i - 1][j] = term_history[i][j];
+        }
+        row = TERM_LINES - 1;
+    }
+
+    int j = 0;
+
+    while (message[j] && j < TERM_COLS - 1) {
+        term_history[row][j] = message[j];
+        j++;
+    }
+
+    term_history[row][j] = '\0';
+}
+
+static void term_print_number(const char *label, uint32_t number)
+{
+    char result[TERM_COLS];
+    char digits[11];
+    int p = 0;
+    int n = 0;
+
+    while (*label && p < TERM_COLS - 12)
+        result[p++] = *label++;
+
+    do {
+        digits[n++] = '0' + (number % 10U);
+        number /= 10U;
+    } while (number != 0 && n < 11);
+
+    while (n > 0)
+        result[p++] = digits[--n];
+
+    result[p] = '\0';
+    term_print(result);
+}
+
+/* ===== Terminal: acceso real a BINFS ===== */
+
+static uint8_t term_file_buffer[BINFS_MAX_FILE_SIZE];
+
+static void term_get_filename(
+    const BinfsEntry *entry,
+    char name[33])
+{
+    for (int i = 0; i < 32; i++)
+        name[i] = entry->name[i];
+
+    name[32] = '\0';
+}
+
+/* Comparar nombres sin distinguir mayusculas */
+static int term_filename_equals(
+    const char *a,
+    const char *b)
+{
+    for (int i = 0; i < 32; i++) {
+        char x = a[i];
+        char y = b[i];
+
+        if (x >= 'a' && x <= 'z')
+            x -= 32;
+
+        if (y >= 'a' && y <= 'z')
+            y -= 32;
+
+        if (x != y)
+            return 0;
+
+        if (x == '\0')
+            return 1;
+    }
+
+    return a[32] == '\0';
+}
+
+/* Comando LS */
+static void term_command_ls(void)
+{
+    int count = binfs_count();
+
+    if (count < 0) {
+        term_print("BINFS CATALOG ERROR");
+        return;
+    }
+
+    if (count == 0) {
+        term_print("NO FILES FOUND");
+        return;
+    }
+
+    for (int i = 0; i < count; i++) {
+        BinfsEntry entry;
+
+        if (binfs_get_entry((uint32_t)i, &entry) == 0) {
+            char name[33];
+            term_get_filename(&entry, name);
+            term_print(name);
+        }
+    }
+}
+
+/* Comando CAT */
+static void term_command_cat(const char *filename)
+{
+    int count = binfs_count();
+
+    if (count < 0) {
+        term_print("BINFS CATALOG ERROR");
+        return;
+    }
+
+    for (int n = 0; n < count; n++) {
+        BinfsEntry entry;
+
+        if (binfs_get_entry((uint32_t)n, &entry) != 0)
+            continue;
+
+        char name[33];
+        term_get_filename(&entry, name);
+
+        if (!term_filename_equals(filename, name))
+            continue;
+
+        uint32_t bytes_read = 0;
+
+        if (binfs_read(
+                name,
+                term_file_buffer,
+                BINFS_MAX_FILE_SIZE,
+                &bytes_read) != 0 ||
+            bytes_read > BINFS_MAX_FILE_SIZE)
+        {
+            term_print("FILE READ ERROR");
+            return;
+        }
+
+        if (bytes_read == 0) {
+            term_print("EMPTY FILE");
+            return;
+        }
+
+        char line[TERM_COLS];
+        int pos = 0;
+        int lines = 0;
+        uint32_t i = 0;
+
+        /* Mostrar hasta 7 lineas de texto */
+        while (i < bytes_read && lines < 7) {
+            uint8_t ch = term_file_buffer[i++];
+
+            if (ch == '\r')
+                continue;
+
+            if (ch == '\n') {
+                line[pos] = '\0';
+                term_print(line);
+                pos = 0;
+                lines++;
+                continue;
+            }
+
+            if (ch == '\t')
+                ch = ' ';
+
+            if (ch < 32 || ch > 126)
+                ch = '?';
+
+            if (pos == TERM_COLS - 1) {
+                line[pos] = '\0';
+                term_print(line);
+                pos = 0;
+                lines++;
+            }
+
+            if (lines < 7)
+                line[pos++] = (char)ch;
+        }
+
+        if (pos > 0 && lines < 7) {
+            line[pos] = '\0';
+            term_print(line);
+        }
+
+        if (i < bytes_read)
+            term_print("[OUTPUT TRUNCATED]");
+
+        return;
+    }
+
+    term_print("FILE NOT FOUND");
+}
+
+
+static void term_execute(void)
+{
+    if (term_len == 0)
+        return;
+
+    if (term_equals(term_input, "CLEAR")) {
+        term_used = 0;
+        return;
+    }
+
+    term_print(term_input);
+
+    if (term_equals(term_input, "HELP")) {
+        term_print("HELP CLEAR ECHO MEM VER FILES");
+    }
+    else if (term_equals(term_input, "VER")) {
+        term_print("MiOS Desktop 0.6");
+        term_print("KERNEL X86 32 BITS");
+    }
+    else if (term_equals(term_input, "MEM")) {
+        term_print_number("TOTAL FRAMES: ",
+                          pmm_total_frames());
+
+        term_print_number("FREE FRAMES: ",
+                          pmm_free_frames());
+    }
+    else if (term_equals(term_input, "FILES")) {
+        term_print_number("BINFS ENTRIES: ",
+                          (uint32_t)binfs_count());
+    }
+    
+else if (term_equals(term_input, "LS")) {
+    term_command_ls();
+}
+else if (term_equals(term_input, "CAT")) {
+    term_print("USAGE: CAT FILENAME");
+}
+else if (term_input[0] == 'C' &&
+         term_input[1] == 'A' &&
+         term_input[2] == 'T' &&
+         term_input[3] == ' ') {
+    term_command_cat(term_input + 4);
+}
+
+    else if (term_input[0] == 'E' &&
+             term_input[1] == 'C' &&
+             term_input[2] == 'H' &&
+             term_input[3] == 'O' &&
+             term_input[4] == ' ') {
+        term_print(term_input + 5);
+    }
+    else {
+        term_print("UNKNOWN COMMAND - TYPE HELP");
+    }
+}
+
+/* Devuelve 1 si hay que actualizar la ventana */
+static int term_handle_key(uint8_t code)
+{
+    /* Ignorar liberaciones de teclas */
+    if (code & 0x80U)
+        return 0;
+
+    /* ENTER */
+    if (code == 0x1C) {
+        term_execute();
+        term_len = 0;
+        term_input[0] = '\0';
+        return 1;
+    }
+
+    /* BACKSPACE */
+    if (code == 0x0E) {
+        if (term_len > 0) {
+            term_len--;
+            term_input[term_len] = '\0';
+            return 1;
+        }
+        return 0;
+    }
+
+    if (code >= sizeof(term_keys))
+        return 0;
+
+    char ch = term_keys[code];
+
+    if (!ch || term_len >= 46)
+        return 0;
+
+    term_input[term_len++] = ch;
+    term_input[term_len] = '\0';
+
+    return 1;
+}
+
+static void term_draw_content(void)
+{
+    /* Redibujar SOLO el interior de la terminal */
+    fb_draw_rect(197, 157, 389, 237, 16, 23, 35);
+
+    fb_text_draw(
+        207, 169, "MiOS INTERACTIVE TERMINAL", 1,
+        100, 230, 170
+    );
+
+    for (int i = 0; i < term_used; i++) {
+        fb_text_draw(
+            207, 193 + i * 16,
+            term_history[i], 1,
+            225, 235, 240
+        );
+    }
+
+    char prompt[55] = "MIOS> ";
+    int p = 6;
+
+    for (int i = 0; i < term_len; i++)
+        prompt[p++] = term_input[i];
+
+    prompt[p++] = '_';
+    prompt[p] = '\0';
+
+    fb_text_draw(
+        207, 356, prompt, 1,
+        135, 255, 165
+    );
+}
+
+static void desktop_draw_app_icons(void)
+{
+    /* Icono de terminal */
+    fb_draw_rect(200, 143, 74, 76, 38, 77, 113);
+    fb_draw_rect(216, 151, 42, 34, 18, 29, 45);
+
+    /* Simbolo >_ */
+    fb_text_draw(
+        224, 163, ">_", 1,
+        135, 255, 164
+    );
+
+    fb_text_draw(
+        207, 198, "TERMINAL", 1,
+        255, 255, 255
+    );
+
+    /* Icono de carpeta */
+    fb_draw_rect(315, 143, 74, 76, 38, 77, 113);
+
+    /* Pestana y cuerpo de carpeta */
+    fb_draw_rect(327, 154, 24, 7, 246, 188, 77);
+    fb_draw_rect(327, 160, 50, 32, 243, 193, 76);
+    fb_draw_rect(330, 166, 44, 23, 255, 215, 118);
+
+    fb_text_draw(
+        326, 198, "ARCHIVOS", 1,
+        255, 255, 255
+    );
+}
+
+/*
+ * Detectar clic sobre iconos.
+ */
+static int desktop_app_hit(int x, int y)
+{
+    if (x >= 200 && x < 274 &&
+        y >= 143 && y < 219)
+        return MIOS_APP_TERMINAL;
+
+    if (x >= 315 && x < 389 &&
+        y >= 143 && y < 219)
+        return MIOS_APP_FILES;
+
+    return MIOS_APP_NONE;
+}
+/*
+ * MiOS Desktop 0.6
+ * Declaraciones anticipadas.
+ */
+static void desktop_draw_app_icons(void);
+static int desktop_app_hit(int x, int y);
+static void desktop_draw_terminal(void);
+static int desktop_render_app(uint32_t window);
+
+/* MiOS Network 0.1 - Deteccion PCI RTL8139 */
+
+static uint32_t net_pci_read(
+    uint8_t bus,
+    uint8_t slot,
+    uint8_t func,
+    uint8_t reg)
+{
+    uint32_t address =
+        0x80000000U |
+        ((uint32_t)bus << 16) |
+        ((uint32_t)slot << 11) |
+        ((uint32_t)func << 8) |
+        (reg & 0xFCU);
+
+    uint32_t value;
+
+    __asm__ volatile(
+        "outl %0, %w1"
+        :
+        : "a"(address), "Nd"((uint16_t)0xCF8)
+    );
+
+    __asm__ volatile(
+        "inl %w1, %0"
+        : "=a"(value)
+        : "Nd"((uint16_t)0xCFC)
+    );
+
+    return value;
+}
+
+static void mios_network_detect(void)
+{
+    serial_write("NET: Buscando RTL8139...\n");
+
+    /* Buscar en el bus PCI 0 de QEMU */
+    for (uint32_t slot = 0; slot < 32; slot++) {
+        for (uint32_t func = 0; func < 8; func++) {
+
+            uint32_t id = net_pci_read(
+                0,
+                (uint8_t)slot,
+                (uint8_t)func,
+                0
+            );
+
+            uint16_t vendor = (uint16_t)id;
+            uint16_t device = (uint16_t)(id >> 16);
+
+            if (vendor == 0x10EC &&
+                device == 0x8139) {
+
+                serial_write(
+                    "NET: RTL8139 ENCONTRADA!\n"
+                );
+
+                serial_write("NET: PCI BAR0 = ");
+                serial_write_hex32(
+                    net_pci_read(
+                        0,
+                        (uint8_t)slot,
+                        (uint8_t)func,
+                        0x10
+                    )
+                );
+                serial_write("\n");
+
+                return;
+            }
+        }
+    }
+
+    serial_write("NET: RTL8139 NO ENCONTRADA\n");
+}
 
 void kernel_main(uint32_t multiboot_magic,
     uint32_t multiboot_info) {
         
 /* Consola de diagnostico independiente de VGA */
 serial_init();
-
+mios_network_detect();
 serial_write("\n");
 serial_write("=== MiOS SERIAL DEBUG ===\n");
 serial_write("Kernel iniciado.\n");
@@ -5672,7 +6190,7 @@ uint32_t desktop_window = 0U;
 int desktop_extended = 0;
 
 /* Dibujar la pantalla inicial */
-if (fb_desktop_draw_live(desktop_window) != 0) {
+if (desktop_render_app(desktop_window) != 0) {
     serial_write("ERROR: dibujando escritorio.\n");
 } else {
     serial_write("DESKTOP READY: OK\n");
@@ -5685,6 +6203,10 @@ if (fb_desktop_draw_live(desktop_window) != 0) {
  * sin iniciar la consola VGA.
  */
 int last_hover = -1;
+/*
+ * MiOS Desktop 0.6.2
+ * Estado anterior del boton izquierdo.
+ */
 for (;;) {
      int redraw = 0;
     uint8_t code = 0;
@@ -5725,15 +6247,18 @@ if (device == PS2_INPUT_MOUSE) {
     mouse_handle_byte(code);
     mouse_get_state(&state);
     
-static uint32_t last_packet = 0;
+    static uint32_t last_packet = 0;
 
-if (!state.available)
+        if (!state.available)
     continue;
 
 if (state.packet_count == last_packet)
     continue;
 
 last_packet = state.packet_count;
+
+/* Detectar una pulsacion NUEVA del boton izquierdo */
+
 
 /*
  * Redibujar el escritorio
@@ -5748,20 +6273,12 @@ int hover = desktop_mouse_hit(
     state.y
 );
 
+
+
 /*
- * Restaurar el fondo antes
- * de actualizar botones.
- */
-fb_cursor_hide();
-
-if (hover != last_hover) {
-    fb_desktop_hover(
-        hover,
-        (int)desktop_window
-    );
-
-    last_hover = hover;
-}
+ * MiOS Desktop 0.6
+ * Ejecutar acciones solo con clic izquierdo.
+*/
 
 /* Dibujar el cursor nuevamente */
 fb_cursor_show(
@@ -5769,7 +6286,7 @@ fb_cursor_show(
     (int)state.y
 );
 
-/*if (fb_desktop_draw_live(desktop_window) == 0) {
+/*if (desktop_render_app(desktop_window); == 0) {
     fb_draw_cursor(
         (int)state.x,
         (int)state.y
@@ -5815,17 +6332,48 @@ if (state.left && !old_left) {
      * Averiguar si se pulso
      * una opcion del menu.
      */
-    int selected = desktop_mouse_hit(
-        state.x,
-        state.y
-    );
+  
+int selected = -1;
+
+/* Cerrar terminal pulsando X */
+if (desktop_window == MIOS_APP_TERMINAL &&
+    state.x >= 564 && state.x < 586 &&
+    state.y >= 129 && state.y < 147)
+{
+    selected = 0;
+}
+
+else
+{
+    /* Solo dock inferior */
+    selected = -1;
+
+    if (state.y >= 433 && state.y < 470) {
+        if (state.x >= 199 && state.x < 247)
+            selected = 0;  /* Inicio */
+        else if (state.x >= 263 && state.x < 311)
+            selected = 5;  /* Terminal */
+        else if (state.x >= 327 && state.x < 375)
+            selected = 3;  /* Archivos */
+        else if (state.x >= 391 && state.x < 439)
+            selected = 4;  /* Sistema */
+    }
+
+    /* Iconos del escritorio */
+    if (selected < 0 && desktop_window == 0) {
+        selected = desktop_app_hit(
+            (int)state.x,
+            (int)state.y
+        );
+    }
+}
 
     if (selected >= 0) {
 fb_cursor_hide();
 
 desktop_window = (uint32_t)selected;
 
-if (fb_desktop_draw_live(desktop_window) == 0) {
+if (desktop_render_app(desktop_window) == 0) {
     fb_cursor_show(
         (int)state.x,
         (int)state.y
@@ -5837,7 +6385,7 @@ if (redraw) {
 
     fb_cursor_hide();
 
-    if (fb_desktop_draw_live(desktop_window) != 0) {
+    if (desktop_render_app(desktop_window) != 0) {
         serial_write("ERROR: cambio de ventana.\n");
     }
 
@@ -5882,8 +6430,35 @@ if (redraw) {
 
 
     old_left = state.left;
+    
+/* Teclado exclusivo de Terminal */
+
+
     continue;
 }
+
+/* Teclado de la Terminal MiOS */
+if (device == PS2_INPUT_KEYBOARD &&
+    desktop_window == MIOS_APP_TERMINAL)
+{
+    if (term_handle_key(code)) {
+        MouseState mouse_now;
+        mouse_get_state(&mouse_now);
+
+        fb_cursor_hide();
+        term_draw_content();
+
+        if (mouse_now.available) {
+            fb_cursor_show(
+                (int)mouse_now.x,
+                (int)mouse_now.y
+            );
+        }
+    }
+
+    continue;
+}
+
 
 
     if (device != PS2_INPUT_KEYBOARD) {
@@ -5954,7 +6529,7 @@ if (redraw) {
     }
 
     if (redraw) {
-        if (fb_desktop_draw_live(desktop_window) != 0) {
+        if (desktop_render_app(desktop_window) != 0) {
             serial_write("ERROR: cambio de ventana.\n");
         }
     }
@@ -6103,3 +6678,240 @@ static void imprimir_numero(uint32_t numero) {
     }
 }
 static void imprimir_numero(uint32_t numero);
+
+static void desktop_draw_terminal(void)
+{
+    /* Sombra */
+    fb_draw_rect(
+        194, 128, 403, 277,
+        9, 24, 43
+    );
+
+    /* Marco de la ventana */
+    fb_draw_rect(
+        190, 124, 403, 277,
+        205, 219, 231
+    );
+
+    /* Barra del titulo */
+    fb_draw_rect(
+        190, 124, 403, 28,
+        24, 106, 156
+    );
+
+    fb_text_draw(
+        204, 134, "MiOS TERMINAL", 1,
+        255, 255, 255
+    );
+
+    /* Boton de cerrar (visual) */
+    fb_draw_rect(
+        564, 129, 22, 18,
+        179, 61, 68
+    );
+
+    fb_text_draw(
+        571, 134, "X", 1,
+        255, 255, 255
+    );
+
+    /* Fondo de la consola */
+    fb_draw_rect(
+        196, 156, 391, 239,
+        16, 23, 35
+    );
+
+    fb_text_draw(
+        211, 172, "MiOS Terminal", 1,
+        125, 234, 177
+    );
+
+    fb_text_draw(
+        211, 191, "Kernel x86 32-bit", 1,
+        190, 205, 222
+    );
+
+    fb_text_draw(
+        211, 225, "mios> _", 1,
+        130, 255, 160
+    );
+}
+
+
+/* MiOS Desktop 0.6.1 - Barra de tareas */
+
+/* MiOS Desktop - Fondo moderno */
+
+static void desktop_draw_wallpaper(void)
+{
+    /* Degradado azul oscuro */
+    for (int y = 0; y < 480; y++) {
+        int shade = y / 20;
+
+        fb_draw_rect(
+            0, y, 640, 1,
+            (uint8_t)(11 + shade),
+            (uint8_t)(29 + shade),
+            (uint8_t)(53 + shade)
+        );
+    }
+
+    /* Detalles decorativos */
+    fb_draw_rect(178, 78, 425, 3, 28, 112, 153);
+    fb_draw_rect(178, 83, 310, 2, 27, 79, 113);
+
+    fb_text_draw(
+        196, 96, "MiOS DESKTOP", 2,
+        237, 247, 255
+    );
+
+    fb_text_draw(
+        196, 119, "TU SISTEMA OPERATIVO", 1,
+        144, 198, 224
+    );
+}
+
+
+static void desktop_draw_taskbar(uint32_t window)
+{
+    static const char *menu[5] = {
+        "INICIO", "PROCESOS", "MEMORIA",
+        "ARCHIVOS", "ACERCA"
+    };
+
+    static const char *dock_labels[4] = {
+        "INI", "TERM", "ARCH", "SIST"
+    };
+
+    static const char *dock_icons[4] = {
+        "M", ">", "F", "S"
+    };
+
+    static const uint32_t dock_apps[4] = {
+        0, 5, 3, 4
+    };
+
+    const char *title = "ESCRITORIO";
+
+    if (window == 1) title = "PROCESOS";
+    if (window == 2) title = "MEMORIA";
+    if (window == 3) title = "ARCHIVOS";
+    if (window == 4) title = "SISTEMA";
+    if (window == 5) title = "TERMINAL";
+    /* Ocultar el menu lateral antiguo */
+for (int y = 45; y < 424; y++) {
+    int shade = y / 20;
+
+    fb_draw_rect(
+        0, y, 175, 1,
+        (uint8_t)(11 + shade),
+        (uint8_t)(29 + shade),
+        (uint8_t)(53 + shade)
+    );
+}
+
+    /* Barra superior */
+    fb_draw_rect(0, 0, 640, 45, 10, 23, 40);
+    fb_draw_rect(0, 43, 640, 2, 39, 154, 190);
+
+    fb_text_draw(
+        20, 14, "MiOS", 2,
+        255, 255, 255
+    );
+
+    fb_text_draw(
+        264, 18, title, 1,
+        175, 220, 241
+    );
+
+
+
+    /* Barra inferior */
+    fb_draw_rect(
+        0, 424, 640, 56,
+        9, 20, 35
+    );
+
+    /* Sombra y cuerpo del dock */
+    fb_draw_rect(
+        183, 427, 275, 51,
+        5, 13, 25
+    );
+
+    fb_draw_rect(
+        186, 429, 270, 47,
+        30, 51, 73
+    );
+
+    /* Cuatro aplicaciones */
+    for (int i = 0; i < 4; i++) {
+        int x = 199 + i * 64;
+
+        if (window == dock_apps[i]) {
+            fb_draw_rect(
+                x, 433, 48, 37,
+                31, 143, 191
+            );
+        } else {
+            fb_draw_rect(
+                x, 433, 48, 37,
+                43, 73, 105
+            );
+        }
+
+        fb_text_draw(
+            x + 18, 438,
+            dock_icons[i], 2,
+            255, 255, 255
+        );
+
+        fb_text_draw(
+            x + 9, 457,
+            dock_labels[i], 1,
+            224, 239, 249
+        );
+    }
+}
+
+
+static int desktop_render_app(uint32_t window)
+{
+    int result;
+
+    /* Terminal */
+    if (window == MIOS_APP_TERMINAL) {
+
+        result = fb_desktop_draw_live(0);
+
+        if (result != 0)
+            return result;
+
+        desktop_draw_wallpaper();
+        desktop_draw_taskbar(window);
+
+        desktop_draw_terminal();
+        term_draw_content();
+
+        return 0;
+    }
+
+    /* Ventanas del sistema */
+    result = fb_desktop_draw_live(window);
+
+    if (result != 0)
+        return result;
+
+    /* Escritorio principal */
+    if (window == 0) {
+        desktop_draw_wallpaper();
+        desktop_draw_app_icons();
+    }
+
+    /* Barras y menú modernos */
+    desktop_draw_taskbar(window);
+
+    return 0;
+}
+
+
+
