@@ -6220,6 +6220,211 @@ static uint32_t rtl8139_in32(uint16_t port)
     return value;
 }
 
+/* ===== MiOS Network 0.3: IPv4 + ICMP ===== */
+
+static uint16_t net_checksum(
+    const uint8_t *data,
+    uint32_t length)
+{
+    uint32_t sum = 0;
+
+    for (uint32_t i = 0; i + 1U < length; i += 2U) {
+        sum += ((uint32_t)data[i] << 8) |
+               data[i + 1U];
+    }
+
+    if (length & 1U)
+        sum += (uint32_t)data[length - 1U] << 8;
+
+    while (sum >> 16)
+        sum = (sum & 0xFFFFU) + (sum >> 16);
+
+    return (uint16_t)~sum;
+}
+
+static int rtl8139_ping_gateway(
+    const uint8_t gateway_mac[6],
+    uint32_t *rx_offset)
+{
+    uint16_t io = rtl8139_io_base;
+
+    if (io == 0 || rx_offset == 0 || gateway_mac == 0)
+        return -1;
+
+    /* Limpiar el paquete de transmision */
+    for (uint32_t i = 0; i < 60U; i++)
+        rtl_tx_buffer[i] = 0;
+
+    /* Cabecera Ethernet */
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = gateway_mac[i];
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(io + (uint16_t)i);
+    }
+
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x00;  /* IPv4 */
+
+    /* Cabecera IPv4 */
+    uint8_t *ip = &rtl_tx_buffer[14];
+
+    ip[0] = 0x45;              /* IPv4, 20 bytes */
+    ip[2] = 0;
+    ip[3] = 44;                /* Tamano IPv4 total */
+    ip[4] = 0x12;
+    ip[5] = 0x34;
+    ip[8] = 64;                /* TTL */
+    ip[9] = 1;                 /* ICMP */
+
+    /* IP origen: 10.0.2.15 */
+    ip[12] = 10;
+    ip[13] = 0;
+    ip[14] = 2;
+    ip[15] = 15;
+
+    /* IP destino: 10.0.2.2 */
+    ip[16] = 10;
+    ip[17] = 0;
+    ip[18] = 2;
+    ip[19] = 2;
+
+    uint16_t checksum = net_checksum(ip, 20);
+
+    ip[10] = (uint8_t)(checksum >> 8);
+    ip[11] = (uint8_t)checksum;
+
+    /* ICMP Echo Request */
+    uint8_t *icmp = ip + 20;
+
+    icmp[0] = 8;               /* Echo Request */
+    icmp[4] = 0x4D;
+    icmp[5] = 0x49;            /* Identificador MI */
+    icmp[6] = 0;
+    icmp[7] = 1;               /* Secuencia 1 */
+
+    for (uint32_t i = 0; i < 16U; i++)
+        icmp[8U + i] = (uint8_t)('A' + i);
+
+    checksum = net_checksum(icmp, 24);
+
+    icmp[2] = (uint8_t)(checksum >> 8);
+    icmp[3] = (uint8_t)checksum;
+
+    /* Enviar trama Ethernet de 60 bytes */
+    __asm__ volatile("" ::: "memory");
+
+    rtl8139_out32(io + 0x24,
+    (uint32_t)(uintptr_t)rtl_tx_buffer);
+
+    rtl8139_out32(io + 0x14, 60U);
+
+    int sent = 0;
+
+    for (uint32_t n = 0; n < 5000000U; n++) {
+        uint32_t tx = rtl8139_in32(io + 0x14);
+
+        if (tx & 0x00008000U) {
+            sent = 1;
+            break;
+        }
+    }
+
+    if (!sent) {
+        serial_write("NET: PING TX ERROR\n");
+        return -1;
+    }
+
+    serial_write("NET: PING 10.0.2.2 ENVIADO\n");
+
+    /* Esperar respuesta usando el mismo anillo RX */
+    for (uint32_t n = 0; n < 10000000U; n++) {
+
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        uint32_t offset = *rx_offset;
+
+        volatile uint8_t *packet =
+            &rtl_rx_buffer[offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 4U ||
+            length > 2048U ||
+            offset + 4U + length > sizeof(rtl_rx_buffer))
+        {
+            serial_write("NET: PING RX ERROR\n");
+            return -1;
+        }
+
+        volatile uint8_t *frame = packet + 4;
+        int is_reply = 0;
+
+        /* Comprobar respuesta IPv4/ICMP */
+        if (length >= 46U &&
+            frame[12] == 8 &&
+            frame[13] == 0 &&
+            (frame[14] >> 4) == 4 &&
+            frame[23] == 1 &&
+            frame[26] == 10 &&
+            frame[27] == 0 &&
+            frame[28] == 2 &&
+            frame[29] == 2 &&
+            frame[30] == 10 &&
+            frame[31] == 0 &&
+            frame[32] == 2 &&
+            frame[33] == 15)
+        {
+            uint32_t ihl =
+                (uint32_t)(frame[14] & 15U) * 4U;
+
+            uint32_t p = 14U + ihl;
+
+            if (ihl >= 20U &&
+                ihl <= 60U &&
+                length >= p + 8U + 4U &&
+                frame[p] == 0 &&
+                frame[p + 1U] == 0 &&
+                frame[p + 4U] == 0x4D &&
+                frame[p + 5U] == 0x49 &&
+                frame[p + 6U] == 0 &&
+                frame[p + 7U] == 1)
+            {
+                is_reply = 1;
+            }
+        }
+
+        /* Liberar paquete del anillo */
+        offset =
+            (offset + 4U + length + 3U) & ~3U;
+
+        offset &= 8191U;
+        *rx_offset = offset;
+
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(offset - 16U)
+        );
+
+        rtl8139_out16(io + 0x3E, 1U);
+
+        if (is_reply) {
+            serial_write("NET: PING 10.0.2.2 OK!\n");
+            return 0;
+        }
+    }
+
+    serial_write("NET: PING TIMEOUT\n");
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -6413,11 +6618,20 @@ static int rtl8139_dma_arp_test(void)
         rtl8139_out16(io + 0x3E, 0x0001U);
 
         if (arp_reply) {
-            serial_write(
-                "NET: RESPUESTA ARP 10.0.2.2 RECIBIDA!\n"
-            );
-            return 0;
-        }
+    uint8_t gateway_mac[6];
+
+    for (int k = 0; k < 6; k++)
+        gateway_mac[k] = frame[22 + k];
+
+    serial_write(
+        "NET: RESPUESTA ARP 10.0.2.2 RECIBIDA!\n"
+    );
+
+    return rtl8139_ping_gateway(
+        gateway_mac,
+        &rx_offset
+    );
+}
     }
 
     serial_write("NET: SIN RESPUESTA ARP\n");
