@@ -38,6 +38,7 @@
 #include "ps2_input.h"
 #include "mouse.h"
 #include "fb_text.h"
+#include "net_udp.h"
 /*
  * 1 = demostracion grafica automatica.
  * 0 = arranque normal de MiOS.
@@ -6643,6 +6644,18 @@ void kernel_main(uint32_t multiboot_magic,
         
 /* Consola de diagnostico independiente de VGA */
 serial_init();
+serial_write("\n=== MiOS NETWORK 0.4A ===\n");
+
+if (net_udp_selftest() == 0) {
+    serial_write("NET: IPv4 HEADER OK\n");
+    serial_write("NET: UDP HEADER OK\n");
+    serial_write("NET: IP CHECKSUM OK\n");
+    serial_write("NET: UDP PAYLOAD OK\n");
+    serial_write("NET: UDP SELFTEST OK\n");
+} else {
+    serial_write("NET: UDP SELFTEST ERROR\n");
+}
+
 mios_network_detect();
 if (rtl8139_init_basic() == 0) {
     rtl8139_dma_arp_test();
