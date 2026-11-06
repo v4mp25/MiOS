@@ -39,6 +39,7 @@
 #include "mouse.h"
 #include "fb_text.h"
 #include "net_udp.h"
+#include "net_dns.h"
 /*
  * 1 = demostracion grafica automatica.
  * 0 = arranque normal de MiOS.
@@ -6437,6 +6438,94 @@ static int rtl8139_ping_gateway(
  * - ARP resuelto
  * - TX DMA disponible
  */
+
+/*
+ * MiOS DNS 0.2
+ * Prueba integrada DNS + UDP + IPv4.
+ * Todavia no transmite por Ethernet.
+ */
+static int mios_dns_packet_test(void)
+{
+    uint8_t dns_query[128];
+    uint8_t ip_packet[256];
+
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dns_ip[4] = {
+        10, 0, 2, 3
+    };
+
+    int dns_size = net_dns_build_query(
+        dns_query,
+        sizeof(dns_query),
+        "example.com",
+        0x4D49
+    );
+
+    if (dns_size != 29) {
+        serial_write(
+            "NET: DNS QUERY BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    serial_write(
+        "NET: DNS QUERY example.com OK\n"
+    );
+
+    int ip_size = net_udp_build_ipv4(
+        ip_packet,
+        sizeof(ip_packet),
+        src_ip,
+        dns_ip,
+        49153,
+        53,
+        dns_query,
+        (uint16_t)dns_size
+    );
+
+    if (ip_size != 57) {
+        serial_write(
+            "NET: DNS UDP BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    /* IPv4 + protocolo UDP */
+    if (ip_packet[0] != 0x45 ||
+        ip_packet[9] != 17) {
+        return -1;
+    }
+
+    /* Puerto destino DNS: 53 */
+    if (ip_packet[22] != 0 ||
+        ip_packet[23] != 53) {
+        return -1;
+    }
+
+    /* IP destino: 10.0.2.3 */
+    if (ip_packet[16] != 10 ||
+        ip_packet[17] != 0 ||
+        ip_packet[18] != 2 ||
+        ip_packet[19] != 3) {
+        return -1;
+    }
+
+    serial_write(
+        "NET: DNS UDP PORT 53 OK\n"
+    );
+    serial_write(
+        "NET: DNS DESTINO 10.0.2.3 OK\n"
+    );
+    serial_write(
+        "NET: DNS IPV4 PACKET OK\n"
+    );
+
+    return 0;
+}
+
 static int rtl8139_udp_send_gateway(
     const uint8_t gateway_mac[6]
 ) {
@@ -7033,6 +7122,43 @@ void kernel_main(uint32_t multiboot_magic,
         
 /* Consola de diagnostico independiente de VGA */
 serial_init();
+
+/* MiOS Network 0.4A.4 - DNS */
+
+serial_write(
+    "\n=== MiOS DNS 0.1 ===\n"
+);
+
+if (net_dns_selftest() == 0) {
+    serial_write(
+        "NET: DNS HEADER OK\n"
+    );
+    serial_write(
+        "NET: DNS QNAME OK\n"
+    );
+    serial_write(
+        "NET: DNS TYPE A OK\n"
+    );
+    serial_write(
+        "NET: DNS SELFTEST OK\n"
+    );
+} else {
+    serial_write(
+        "NET: DNS SELFTEST ERROR\n"
+    );
+}
+
+if (mios_dns_packet_test() == 0) {
+    serial_write(
+        "NET: DNS 0.2 PACKET READY\n"
+    );
+} else {
+    serial_write(
+        "NET: DNS 0.2 PACKET ERROR\n"
+    );
+}
+
+
 serial_write("\n=== MiOS NETWORK 0.4A ===\n");
 
 if (net_udp_selftest() == 0) {
