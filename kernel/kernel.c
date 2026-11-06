@@ -6426,6 +6426,347 @@ static int rtl8139_ping_gateway(
     return -1;
 }
 
+/*
+ * MiOS Network 0.4A.2
+ *
+ * Enviar un paquete UDP por RTL8139
+ * hacia la puerta de enlace QEMU.
+ *
+ * Requiere:
+ * - RTL8139 inicializada
+ * - ARP resuelto
+ * - TX DMA disponible
+ */
+static int rtl8139_udp_send_gateway(
+    const uint8_t gateway_mac[6]
+) {
+    if (gateway_mac == 0 ||
+        rtl8139_io_base == 0) {
+        return -1;
+    }
+
+    uint16_t io = rtl8139_io_base;
+
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dst_ip[4] = {
+        10, 0, 2, 2
+    };
+
+    const uint8_t message[] = {
+        'H', 'O', 'L', 'A', ' ',
+        'U', 'D', 'P', ' ',
+        'M', 'I', 'O', 'S'
+    };
+
+    /*
+     * Preparar un unico buffer DMA.
+     * La prueba ARP/ICMP ya termino.
+     */
+    for (uint32_t i = 0;
+         i < sizeof(rtl_tx_buffer);
+         i++) {
+        rtl_tx_buffer[i] = 0;
+    }
+
+    /* MAC destino: puerta de enlace */
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = gateway_mac[i];
+
+        /* MAC origen: nuestra RTL8139 */
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(io + (uint16_t)i);
+    }
+
+    /* EtherType IPv4 */
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x00;
+
+    /*
+     * Construir IPv4 + UDP despues
+     * de los 14 bytes Ethernet.
+     */
+    int ip_size = net_udp_build_ipv4(
+        &rtl_tx_buffer[14],
+        sizeof(rtl_tx_buffer) - 14U,
+        src_ip,
+        dst_ip,
+        49152U,
+        5555U,
+        message,
+        (uint16_t)sizeof(message)
+    );
+
+    if (ip_size < 0) {
+        serial_write(
+            "NET: UDP BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    uint32_t frame_size =
+        14U + (uint32_t)ip_size;
+
+    /* Ethernet exige al menos 60 bytes sin FCS */
+    if (frame_size < 60U)
+        frame_size = 60U;
+
+    if (frame_size > sizeof(rtl_tx_buffer))
+        return -1;
+
+    /*
+     * Usar descriptor TX2:
+     * TSAD2 = IO + 0x28
+     * TSD2  = IO + 0x18
+     */
+    __asm__ volatile("" ::: "memory");
+
+    rtl8139_out32(
+        io + 0x28,
+        (uint32_t)(uintptr_t)rtl_tx_buffer
+    );
+
+    rtl8139_out32(
+        io + 0x18,
+        frame_size
+    );
+
+    /* Esperar confirmacion de transmision */
+    for (uint32_t n = 0;
+         n < 5000000U;
+         n++) {
+
+        uint32_t status =
+            rtl8139_in32(io + 0x18);
+
+        /* TOK: transmision completada */
+        if (status & 0x00008000U) {
+            serial_write(
+                "NET: UDP TX OK\n"
+            );
+            serial_write(
+                "NET: DESTINO 10.0.2.2:5555\n"
+            );
+            serial_write(
+                "NET: MENSAJE HOLA UDP MIOS\n"
+            );
+            return 0;
+        }
+
+        /* TABT: transmision abortada */
+        if (status & 0x40000000U) {
+            serial_write(
+                "NET: UDP TX ABORTADA\n"
+            );
+            return -1;
+        }
+    }
+
+    serial_write("NET: UDP TX TIMEOUT\n");
+    return -1;
+}
+
+/*
+ * MiOS Network 0.4A.3
+ * Recibir respuesta UDP desde QEMU/Ubuntu.
+ *
+ * Reutiliza el anillo RX de ARP e ICMP.
+ */
+static int rtl8139_udp_receive(
+    uint32_t *rx_offset
+) {
+    if (rtl8139_io_base == 0 ||
+        rx_offset == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    serial_write(
+        "NET: ESPERANDO RESPUESTA UDP...\n"
+    );
+
+    for (uint32_t n = 0;
+         n < 100000000U;
+         n++) {
+
+        /* BUFE=1: anillo RX vacio */
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        uint32_t offset = *rx_offset;
+
+        volatile uint8_t *packet =
+            &rtl_rx_buffer[offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 4U ||
+            length > 2048U ||
+            offset + 4U + length >
+                sizeof(rtl_rx_buffer)) {
+
+            serial_write(
+                "NET: UDP RX PACKET ERROR\n"
+            );
+            return -1;
+        }
+
+        volatile uint8_t *frame = packet + 4;
+
+        int valid_reply = 0;
+
+        /*
+         * RX length incluye los 4 bytes
+         * del FCS Ethernet.
+         */
+        uint32_t frame_size =
+            (uint32_t)length - 4U;
+
+        if (frame_size >= 14U + 20U + 8U &&
+            frame[12] == 0x08 &&
+            frame[13] == 0x00) {
+
+            volatile uint8_t *ip =
+                frame + 14;
+
+            uint32_t ihl =
+                (uint32_t)(ip[0] & 15U) * 4U;
+
+            uint32_t ip_total =
+                ((uint32_t)ip[2] << 8) |
+                (uint32_t)ip[3];
+
+            uint16_t frag =
+                ((uint16_t)ip[6] << 8) |
+                (uint16_t)ip[7];
+
+            if ((ip[0] >> 4) == 4U &&
+                ihl >= 20U &&
+                ihl <= 60U &&
+                frame_size >= 14U + ihl + 8U &&
+                ip_total >= ihl + 8U &&
+                ip_total <= frame_size - 14U &&
+                ip[9] == 17U &&
+                (frag & 0x3FFFU) == 0U &&
+
+                /* IP origen: 10.0.2.2 */
+                ip[12] == 10 &&
+                ip[13] == 0 &&
+                ip[14] == 2 &&
+                ip[15] == 2 &&
+
+                /* IP destino: 10.0.2.15 */
+                ip[16] == 10 &&
+                ip[17] == 0 &&
+                ip[18] == 2 &&
+                ip[19] == 15) {
+
+                volatile uint8_t *udp =
+                    ip + ihl;
+
+                uint16_t src_port =
+                    ((uint16_t)udp[0] << 8) |
+                    udp[1];
+
+                uint16_t dst_port =
+                    ((uint16_t)udp[2] << 8) |
+                    udp[3];
+
+                uint16_t udp_length =
+                    ((uint16_t)udp[4] << 8) |
+                    udp[5];
+
+                static const char expected[] =
+                    "MIOS UDP OK";
+
+                const uint32_t expected_len =
+                    sizeof(expected) - 1U;
+
+                if (src_port == 5555U &&
+                    dst_port == 49152U &&
+                    udp_length ==
+                        8U + expected_len &&
+                    udp_length <= ip_total - ihl) {
+
+                    volatile uint8_t *data =
+                        udp + 8;
+
+                    valid_reply = 1;
+
+                    for (uint32_t i = 0;
+                         i < expected_len;
+                         i++) {
+
+                        if (data[i] !=
+                            (uint8_t)expected[i]) {
+
+                            valid_reply = 0;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        /*
+         * Liberar el paquete y avanzar
+         * en el mismo anillo RX.
+         */
+        offset =
+            (offset + 4U + length + 3U)
+            & ~3U;
+
+        offset &= 8191U;
+
+        *rx_offset = offset;
+
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(offset - 16U)
+        );
+
+        rtl8139_out16(
+            io + 0x3E,
+            0x0001U
+        );
+
+        if (valid_reply) {
+            serial_write(
+                "NET: UDP RESPUESTA RECIBIDA!\n"
+            );
+
+            serial_write(
+                "NET: ORIGEN 10.0.2.2:5555\n"
+            );
+
+            serial_write(
+                "NET: MENSAJE MIOS UDP OK\n"
+            );
+
+            serial_write(
+                "NET: UDP RX OK\n"
+            );
+
+            return 0;
+        }
+    }
+
+    serial_write(
+        "NET: UDP RX TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -6624,14 +6965,62 @@ static int rtl8139_dma_arp_test(void)
     for (int k = 0; k < 6; k++)
         gateway_mac[k] = frame[22 + k];
 
-    serial_write(
-        "NET: RESPUESTA ARP 10.0.2.2 RECIBIDA!\n"
-    );
+   
+serial_write(
+    "NET: RESPUESTA ARP 10.0.2.2 RECIBIDA!\n"
+);
 
-    return rtl8139_ping_gateway(
+/* Primero comprobar ICMP */
+if (rtl8139_ping_gateway(
         gateway_mac,
         &rx_offset
+    ) != 0) {
+
+    serial_write(
+        "NET: PING FALLO, UDP CANCELADO\n"
     );
+    return -1;
+}
+
+/* Despues transmitir UDP */
+serial_write(
+    "NET: PREPARANDO UDP REAL\n"
+);
+
+
+/* Enviar datagrama UDP */
+if (rtl8139_udp_send_gateway(
+        gateway_mac
+    ) != 0) {
+
+    serial_write(
+        "NET: UDP TX ERROR\n"
+    );
+    return -1;
+}
+
+serial_write(
+    "NET: UDP TRANSMISION COMPLETADA\n"
+);
+
+/* Esperar la respuesta de Ubuntu */
+if (rtl8139_udp_receive(
+        &rx_offset
+    ) != 0) {
+
+    serial_write(
+        "NET: UDP RX FALLO\n"
+    );
+    return -1;
+}
+
+serial_write(
+    "NET: UDP INTERCAMBIO COMPLETO!\n"
+);
+
+return 0;
+
+
 }
     }
 
