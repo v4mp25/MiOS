@@ -9644,6 +9644,87 @@ static int mios_download_save_binfs(void)
 }
 
 /*
+ * MiOS HTTP 0.6C
+ *
+ * Leer la descarga desde BINFS sin
+ * depender de una conexion de red.
+ *
+ * Verifica:
+ * - Nombre del archivo.
+ * - Tamano de 3072 bytes.
+ * - Contenido inicial conocido.
+ *
+ * No escribe en disco.
+ */
+static int mios_download_offline_test(void)
+{
+    static uint8_t file_data[BINFS_MAX_FILE_SIZE];
+
+    const char *filename = "http3072.bin";
+
+    uint32_t size = 0U;
+
+    serial_write(
+        "NET: OFFLINE LEYENDO BINFS...\n"
+    );
+
+    if (binfs_read(
+            filename,
+            file_data,
+            sizeof(file_data),
+            &size
+        ) != 0) {
+
+        serial_write(
+            "NET: OFFLINE READ ERROR\n"
+        );
+
+        return -1;
+    }
+
+    if (size != 3072U) {
+
+        serial_write(
+            "NET: OFFLINE SIZE ERROR\n"
+        );
+
+        return -1;
+    }
+
+    static const char expected[] =
+        "Bienvenido a MiOS\n";
+
+    for (uint32_t i = 0U;
+         i < sizeof(expected) - 1U;
+         i++) {
+
+        if (file_data[i] !=
+            (uint8_t)expected[i]) {
+
+            serial_write(
+                "NET: OFFLINE CONTENT ERROR\n"
+            );
+
+            return -1;
+        }
+    }
+
+    serial_write(
+        "NET: OFFLINE BINFS 3072 BYTES OK\n"
+    );
+
+    serial_write(
+        "NET: OFFLINE CONTENIDO VALIDADO\n"
+    );
+
+    serial_write(
+        "NET: HTTP 0.6C COMPLETADO!\n"
+    );
+
+    return 0;
+}
+
+/*
  * Declaracion adelantada:
  * la implementacion ya existe
  * mas abajo en kernel.c.
@@ -11440,58 +11521,25 @@ if (binfs_slots < 0) {
  * HTTP 0.6A:
  * Ejecutar red cuando MIOSFS ya esta inicializado.
  */
-if (mios_network_ready) {
-    serial_write("NET: MIOSFS INICIALIZADO, INICIANDO HTTP\n");
-
-    
-if (rtl8139_dma_arp_test() != 0) {
-
-    serial_write(
-        "NET: PRUEBA HTTP/RED FALLO\n"
-    );
-
-} else {
-
-    /*
-     * Verificar que el archivo completo
-     * sigue en RAM despues del cierre TCP.
-     */
-    if (mios_download_verify() == 0 &&
-        mios_download_size == 3072U) {
-
-        serial_write(
-            "NET: DOWNLOAD POST-TCP OK\n"
-        );
 
 /*
- * HTTP 0.6B.2
+ * MiOS HTTP 0.6C
  *
- * Guardar despues del cierre TCP.
+ * Prueba offline:
+ * leer http3072.bin desde BINFS
+ * sin ejecutar las pruebas de red.
  */
 serial_write(
-    "NET: INICIANDO GUARDADO BINFS\n"
+    "NET: MODO DESCARGA OFFLINE\n"
 );
 
-if (mios_download_save_binfs() != 0) {
+if (mios_download_offline_test() != 0) {
 
     serial_write(
-        "NET: HTTP BINFS SAVE FALLO\n"
+        "NET: HTTP OFFLINE TEST FALLO\n"
     );
 }
 
-       serial_write(
-    "NET: HTTP 0.6B.1 RAM COMPLETADO\n"
-);
-
-    } else {
-
-        serial_write(
-            "NET: DOWNLOAD POST-TCP ERROR\n"
-        );
-    }
-}
-
-}
     memory_init();
     thread_init();
     process_init();
