@@ -4,7 +4,7 @@ import socket
 HOST = "0.0.0.0"
 PORT = 8080
 
-BODY = b"Hola desde MiOS"
+BODY = b"Bienvenido a MiOS"
 
 server = socket.socket(
     socket.AF_INET,

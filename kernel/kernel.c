@@ -9498,95 +9498,75 @@ static int rtl8139_http_receive(
         if (!valid)
             continue;
 
-        /*
-         * Comprobar el formato de nuestra
-         * respuesta HTTP de laboratorio.
-         */
-        static const char prefix[] =
-            "HTTP/1.1 200 OK\r\n";
+       
+/*
+ * MiOS HTTP 0.4
+ * Analizar la respuesta sin depender
+ * de "Hola desde MiOS".
+ */
+net_http_response_t response;
 
-        int prefix_ok = 1;
+int parse_result = net_http_parse_response(
+    http_buffer,
+    received_bytes,
+    &response
+);
 
-        if (received_bytes < sizeof(prefix) - 1U)
-            prefix_ok = 0;
+if (parse_result != 0) {
+    serial_write(
+        "NET: HTTP PARSER ERROR\n"
+    );
+    return -1;
+}
 
-        if (prefix_ok) {
-            for (uint32_t i = 0;
-                 i < sizeof(prefix) - 1U;
-                 i++) {
+if (response.status_code != 200U) {
+    serial_write(
+        "NET: HTTP STATUS NO ES 200\n"
+    );
+    return -1;
+}
 
-                if (http_buffer[i] !=
-                    (uint8_t)prefix[i]) {
+/*
+ * Copiar solo el cuerpo HTTP.
+ *
+ * Añadir byte NUL para imprimirlo
+ * como texto en COM1.
+ */
+static char body_text[MIOS_HTTP_RX_MAX + 1U];
 
-                    prefix_ok = 0;
-                    break;
-                }
-            }
-        }
+if (response.body_length > MIOS_HTTP_RX_MAX) {
+    serial_write(
+        "NET: HTTP BODY DEMASIADO GRANDE\n"
+    );
+    return -1;
+}
 
-        if (!prefix_ok) {
-            serial_write(
-                "NET: HTTP STATUS NO SOPORTADO\n"
-            );
-            return -1;
-        }
+for (uint32_t i = 0U;
+     i < response.body_length;
+     i++) {
 
-        /* Localizar fin de cabeceras CRLFCRLF */
-        uint32_t body_offset = 0U;
+    body_text[i] =
+        (char)http_buffer[
+            response.body_offset + i
+        ];
+}
 
-        for (uint32_t i = 0;
-             i + 3U < received_bytes;
-             i++) {
+body_text[response.body_length] = '\0';
 
-            if (http_buffer[i] == '\r' &&
-                http_buffer[i + 1U] == '\n' &&
-                http_buffer[i + 2U] == '\r' &&
-                http_buffer[i + 3U] == '\n') {
+serial_write(
+    "NET: HTTP STATUS 200 OK\n"
+);
 
-                body_offset = i + 4U;
-                break;
-            }
-        }
+serial_write(
+    "NET: HTTP CONTENT-LENGTH VALIDADO\n"
+);
 
-        if (body_offset == 0U) {
-            serial_write(
-                "NET: HTTP HEADER INCOMPLETO\n"
-            );
-            return -1;
-        }
+serial_write(
+    "NET: HTTP BODY RECIBIDO:\n"
+);
 
-        /*
-         * En este laboratorio sabemos que
-         * el servidor envia 15 bytes.
-         * El analizador general de Content-Length
-         * sera una etapa independiente.
-         */
-        static const char expected_body[] =
-            "Hola desde MiOS";
-
-        uint32_t body_size =
-            received_bytes - body_offset;
-
-        if (body_size != sizeof(expected_body) - 1U) {
-            serial_write(
-                "NET: HTTP BODY SIZE ERROR\n"
-            );
-            return -1;
-        }
-
-        for (uint32_t i = 0;
-             i < body_size;
-             i++) {
-
-            if (http_buffer[body_offset + i] !=
-                (uint8_t)expected_body[i]) {
-
-                serial_write(
-                    "NET: HTTP BODY ERROR\n"
-                );
-                return -1;
-            }
-        }
+serial_write(body_text);
+serial_write("\n");
 
         *next_server_seq =
             received_seq + received_bytes;
@@ -10464,11 +10444,18 @@ if (net_http_selftest() == 0) {
     serial_write(
         "NET: HTTP SELFTEST OK\n"
     );
+} 
+
+if (net_http_parser_selftest() == 0) {
+    serial_write(
+        "NET: HTTP PARSER SELFTEST OK\n"
+    );
 } else {
     serial_write(
-        "NET: HTTP SELFTEST ERROR\n"
+        "NET: HTTP PARSER SELFTEST ERROR\n"
     );
 }
+
 
 /* MiOS Network TCP 0.1 */
 
