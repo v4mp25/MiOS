@@ -7775,6 +7775,278 @@ static int rtl8139_tcp_send_syn(
     return -1;
 }
 
+/*
+ * MiOS Network TCP 0.3
+ *
+ * Leer SYN-ACK del anillo RX RTL8139.
+ * No envia el ACK final todavia.
+ */
+
+static uint16_t mios_tcp_read16(
+    const volatile uint8_t *p
+) {
+    return (uint16_t)(
+        ((uint16_t)p[0] << 8) |
+        (uint16_t)p[1]
+    );
+}
+
+static uint32_t mios_tcp_read32(
+    const volatile uint8_t *p
+) {
+    return
+        ((uint32_t)p[0] << 24) |
+        ((uint32_t)p[1] << 16) |
+        ((uint32_t)p[2] << 8) |
+        (uint32_t)p[3];
+}
+
+/*
+ * Validar checksum TCP usando la
+ * pseudo-cabecera IPv4.
+ *
+ * Devuelve 1 si es correcto.
+ */
+static int mios_tcp_checksum_valid(
+    const volatile uint8_t *ip,
+    const volatile uint8_t *tcp,
+    uint32_t tcp_len
+) {
+    uint32_t sum = 0;
+
+    /* Direcciones IP de la pseudo-cabecera */
+    for (uint32_t i = 12; i < 20; i += 2) {
+        sum +=
+            ((uint32_t)ip[i] << 8) |
+            (uint32_t)ip[i + 1];
+    }
+
+    sum += 6U;       /* Protocolo TCP */
+    sum += tcp_len;  /* Longitud TCP */
+
+    for (uint32_t i = 0; i < tcp_len; i += 2) {
+        uint16_t word =
+            (uint16_t)tcp[i] << 8;
+
+        if (i + 1 < tcp_len)
+            word |= tcp[i + 1];
+
+        sum += word;
+    }
+
+    while (sum >> 16)
+        sum = (sum & 0xFFFFU) + (sum >> 16);
+
+    return ((uint16_t)sum == 0xFFFFU);
+}
+
+/*
+ * Salida:
+ * server_next_seq = SEQ del SYN-ACK + 1
+ *
+ * Guarda informacion necesaria para
+ * preparar el ACK en TCP 0.4.
+ */
+static int rtl8139_tcp_receive_synack(
+    uint32_t *rx_offset,
+    uint32_t *server_next_seq
+) {
+    if (!rx_offset ||
+        !server_next_seq ||
+        rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    serial_write(
+        "NET: ESPERANDO TCP SYN-ACK...\n"
+    );
+
+    for (uint32_t n = 0;
+         n < 100000000U;
+         n++) {
+
+        /* BUFE=1: anillo RX vacio */
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        uint32_t offset = *rx_offset;
+
+        volatile uint8_t *packet =
+            &rtl_rx_buffer[offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 4U ||
+            length > 2048U ||
+            offset + 4U + length >
+                sizeof(rtl_rx_buffer)) {
+
+            serial_write(
+                "NET: TCP RX PACKET ERROR\n"
+            );
+            return -1;
+        }
+
+        volatile uint8_t *frame = packet + 4;
+        uint32_t frame_size = length - 4U;
+
+        int synack_ok = 0;
+        uint32_t next_seq = 0;
+
+        /* Ethernet + IPv4 + TCP minimo */
+        if (frame_size >= 54U &&
+            frame[12] == 0x08 &&
+            frame[13] == 0x00) {
+
+            volatile uint8_t *ip =
+                frame + 14;
+
+            uint32_t ihl =
+                (uint32_t)(ip[0] & 15U) * 4U;
+
+            uint32_t ip_total =
+                mios_tcp_read16(ip + 2);
+
+            uint16_t fragment =
+                mios_tcp_read16(ip + 6);
+
+            if ((ip[0] >> 4) == 4U &&
+                ihl >= 20U &&
+                ihl <= 60U &&
+                frame_size >= 14U + ihl + 20U &&
+                ip_total >= ihl + 20U &&
+                ip_total <= frame_size - 14U &&
+                (fragment & 0x3FFFU) == 0U &&
+                ip[9] == 6U &&
+
+                /* IP servidor 10.0.2.2 */
+                ip[12] == 10 &&
+                ip[13] == 0 &&
+                ip[14] == 2 &&
+                ip[15] == 2 &&
+
+                /* IP MiOS 10.0.2.15 */
+                ip[16] == 10 &&
+                ip[17] == 0 &&
+                ip[18] == 2 &&
+                ip[19] == 15) {
+
+                volatile uint8_t *tcp =
+                    ip + ihl;
+
+                uint32_t tcp_len =
+                    ip_total - ihl;
+
+                uint32_t tcp_header_len =
+                    ((uint32_t)tcp[12] >> 4) * 4U;
+
+                uint16_t src_port =
+                    mios_tcp_read16(tcp);
+
+                uint16_t dst_port =
+                    mios_tcp_read16(tcp + 2);
+
+                uint32_t server_seq =
+                    mios_tcp_read32(tcp + 4);
+
+                uint32_t server_ack =
+                    mios_tcp_read32(tcp + 8);
+
+                uint8_t flags = tcp[13];
+
+                /*
+                 * SYN + ACK deben estar activos.
+                 * RST y FIN deben estar apagados.
+                 */
+                if (tcp_header_len >= 20U &&
+                    tcp_header_len <= tcp_len &&
+                    src_port == 8080U &&
+                    dst_port == 49154U &&
+                    (flags & 0x12U) == 0x12U &&
+                    (flags & 0x05U) == 0U &&
+                    server_ack == 0x12345679U &&
+                    mios_tcp_checksum_valid(
+                        ip,
+                        tcp,
+                        tcp_len
+                    )) {
+
+                    next_seq = server_seq + 1U;
+                    synack_ok = 1;
+                }
+            }
+        }
+
+        /*
+         * Consumir el paquete del anillo RX.
+         * Mantener la posicion compartida.
+         */
+        offset =
+            (offset + 4U + length + 3U)
+            & ~3U;
+
+        offset &= 8191U;
+        *rx_offset = offset;
+
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(offset - 16U)
+        );
+
+        rtl8139_out16(
+            io + 0x3E,
+            0x0001U
+        );
+
+        if (synack_ok) {
+            *server_next_seq = next_seq;
+
+            serial_write(
+                "NET: TCP SYN-ACK RECIBIDO!\n"
+            );
+
+            serial_write(
+                "NET: TCP PUERTOS OK\n"
+            );
+
+            serial_write(
+                "NET: TCP SEQUENCE/ACK OK\n"
+            );
+
+            serial_write(
+                "NET: TCP CHECKSUM RX OK\n"
+            );
+
+            serial_write(
+                "NET: TCP SYN-ACK VALIDADO\n"
+            );
+
+            serial_write(
+                "NET: TCP SERVER NEXT SEQ = "
+            );
+
+            serial_write_hex32(next_seq);
+            serial_write("\n");
+
+            return 0;
+        }
+    }
+
+    serial_write(
+        "NET: TCP SYN-ACK TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -8095,6 +8367,43 @@ if (rtl8139_tcp_send_syn(
 serial_write(
     "NET: TCP 0.2 TRANSMISION COMPLETA\n"
 );
+
+    /*
+     * MiOS Network TCP 0.3
+     * Recibir y validar SYN-ACK.
+     */
+
+    uint32_t tcp_server_next_seq = 0;
+
+    serial_write(
+        "NET: ESPERANDO HANDSHAKE TCP 0.3\n"
+    );
+
+    if (rtl8139_tcp_receive_synack(
+            &rx_offset,
+            &tcp_server_next_seq
+        ) != 0) {
+
+        serial_write(
+            "NET: TCP HANDSHAKE RX FALLO\n"
+        );
+
+        return -1;
+    }
+
+    serial_write(
+        "NET: TCP 0.3 COMPLETADO\n"
+    );
+
+    /*
+     * Informacion para TCP 0.4:
+     *
+     * SEQ = 0x12345679
+     * ACK = tcp_server_next_seq
+     *
+     * En la siguiente etapa
+     * enviaremos el ACK final.
+     */
 
 return 0;
 
