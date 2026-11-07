@@ -98,4 +98,23 @@ int binfs_replace_file(
     const char *source,
     const char *destination
 );
+
+/*
+ * MiOS HTTP 0.6B
+ *
+ * Crear un archivo BINFS a partir
+ * de un buffer binario en memoria.
+ *
+ * No sobrescribe archivos existentes.
+ * Respeta el limite de 8192 bytes.
+ *
+ *  0 = exito
+ * -1 = error
+ */
+int binfs_create_from_buffer(
+    const char *filename,
+    const uint8_t *data,
+    uint32_t size
+);
+
 #endif

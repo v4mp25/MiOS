@@ -9320,6 +9320,330 @@ static int rtl8139_tcp_receive_final_ack(
 #define MIOS_HTTP_RX_MAX 4096U
 
 /*
+ * MiOS HTTP 0.6B.1
+ *
+ * Archivo descargado en RAM.
+ * Se conserva despues de salir
+ * del receptor HTTP.
+ */
+static uint8_t mios_download_data[4096];
+
+static uint32_t mios_download_size = 0U;
+static uint32_t mios_download_checksum = 0U;
+static int mios_download_ready = 0;
+
+/*
+ * FNV-1a 32 bits.
+ *
+ * Detecta alteraciones accidentales
+ * en nuestra prueba de almacenamiento.
+ * No es un hash criptografico.
+ */
+static uint32_t mios_download_hash(
+    const uint8_t *data,
+    uint32_t length
+) {
+    uint32_t hash = 2166136261U;
+
+    for (uint32_t i = 0U; i < length; i++) {
+        hash ^= data[i];
+        hash *= 16777619U;
+    }
+
+    return hash;
+}
+
+/*
+ * Preparar una descarga binaria
+ * sin depender de cadenas de texto.
+ */
+static int mios_download_prepare(
+    const uint8_t *data,
+    uint32_t length
+) {
+    mios_download_ready = 0;
+    mios_download_size = 0U;
+    mios_download_checksum = 0U;
+
+    if (!data ||
+        length == 0U ||
+        length > sizeof(mios_download_data))
+        return -1;
+
+    for (uint32_t i = 0U; i < length; i++)
+        mios_download_data[i] = data[i];
+
+    mios_download_size = length;
+
+    mios_download_checksum =
+        mios_download_hash(
+            mios_download_data,
+            mios_download_size
+        );
+
+    mios_download_ready = 1;
+
+    return 0;
+}
+
+/*
+ * Verificar los bytes que quedan
+ * disponibles para guardarlos en disco.
+ */
+static int mios_download_verify(void)
+{
+    if (!mios_download_ready)
+        return -1;
+
+    if (mios_download_size == 0U ||
+        mios_download_size >
+            sizeof(mios_download_data))
+        return -1;
+
+    uint32_t actual_hash =
+        mios_download_hash(
+            mios_download_data,
+            mios_download_size
+        );
+
+    if (actual_hash != mios_download_checksum)
+        return -1;
+
+    return 0;
+}
+
+/*
+ * MiOS HTTP 0.6B.2
+ *
+ * Guardar el archivo HTTP completo
+ * utilizando BINFS.
+ *
+ * Si ya existe, verificarlo.
+ * Nunca sobrescribirlo.
+ */
+
+/*
+ * MiOS HTTP 0.6B
+ *
+ * Guardar una descarga HTTP completa en BINFS.
+ *
+ * - Verifica los datos descargados en RAM.
+ * - No sobrescribe archivos existentes.
+ * - Diagnostica errores de creacion.
+ * - Lee el archivo desde BINFS.
+ * - Comprueba longitud, bytes y checksum.
+ *
+ *  0 = exito
+ * -1 = error
+ */
+static int mios_download_save_binfs(void)
+{
+    static uint8_t verify_buffer[BINFS_MAX_FILE_SIZE];
+
+    const char *filename = "http3072.bin";
+
+    /*
+     * 1. Verificar la descarga en RAM.
+     */
+    if (mios_download_verify() != 0) {
+        serial_write(
+            "NET: DOWNLOAD NO VALIDA\n"
+        );
+        return -1;
+    }
+
+    if (mios_download_size != 3072U) {
+        serial_write(
+            "NET: DOWNLOAD SIZE INESPERADO\n"
+        );
+        return -1;
+    }
+
+    /*
+     * 2. Comprobar si el archivo ya existe.
+     */
+    uint32_t read_size = 0U;
+
+    int read_result = binfs_read(
+        filename,
+        verify_buffer,
+        sizeof(verify_buffer),
+        &read_size
+    );
+
+    if (read_result == 0) {
+
+        serial_write(
+            "NET: BINFS ARCHIVO YA EXISTE\n"
+        );
+
+    } else {
+
+        /*
+         * 3. Crear el archivo desde RAM.
+         */
+        serial_write(
+            "NET: BINFS INICIANDO CREACION\n"
+        );
+
+        int create_result = binfs_create_from_buffer(
+            filename,
+            mios_download_data,
+            mios_download_size
+        );
+
+        /*
+         * 4. Diagnosticar el resultado.
+         *
+         * Estos codigos deben coincidir con
+         * los return de binfs_create_from_buffer().
+         */
+        if (create_result == -2) {
+
+            serial_write(
+                "BINFS ERROR: SIN SLOT REUTILIZABLE\n"
+            );
+
+            return -1;
+
+        
+} else if (create_result == -3) {
+
+    serial_write(
+        "BINFS ERROR: NO SE PUDO CARGAR CATALOGO\n"
+    );
+
+    return -1;
+
+} else if (create_result == -6) {
+
+    serial_write(
+        "BINFS ERROR: CATALOGO SIN SLOTS\n"
+    );
+
+    return -1;
+
+} else if (create_result == -7) {
+
+    serial_write(
+        "BINFS ERROR: CANTIDAD DE SLOTS INVALIDA\n"
+    );
+
+    return -1;
+
+
+        } else if (create_result == -4) {
+
+            serial_write(
+                "BINFS ERROR: GENERACION INVALIDA\n"
+            );
+
+            return -1;
+
+        } else if (create_result == -5) {
+
+            serial_write(
+                "BINFS ERROR: PUBLICACION A/B FALLIDA\n"
+            );
+
+            return -1;
+
+        } else if (create_result != 0) {
+
+            serial_write(
+                "BINFS ERROR: OTRA VALIDACION O ESCRITURA\n"
+            );
+
+            return -1;
+        }
+
+        serial_write(
+            "NET: BINFS ARCHIVO CREADO\n"
+        );
+    }
+
+    /*
+     * 5. Leer nuevamente el archivo desde BINFS.
+     */
+    read_size = 0U;
+
+    if (binfs_read(
+            filename,
+            verify_buffer,
+            sizeof(verify_buffer),
+            &read_size
+        ) != 0) {
+
+        serial_write(
+            "NET: BINFS READBACK ERROR\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 6. Verificar el tamano exacto.
+     */
+    if (read_size != mios_download_size) {
+
+        serial_write(
+            "NET: BINFS SIZE ERROR\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 7. Comparar todos los bytes recuperados.
+     */
+    for (uint32_t i = 0U; i < read_size; i++) {
+
+        if (verify_buffer[i] != mios_download_data[i]) {
+
+            serial_write(
+                "NET: BINFS DATA MISMATCH\n"
+            );
+
+            return -1;
+        }
+    }
+
+    /*
+     * 8. Comprobar el checksum del archivo.
+     */
+    uint32_t disk_hash = mios_download_hash(
+        verify_buffer,
+        read_size
+    );
+
+    if (disk_hash != mios_download_checksum) {
+
+        serial_write(
+            "NET: BINFS CHECKSUM ERROR\n"
+        );
+
+        return -1;
+    }
+
+    /*
+     * 9. Descarga y almacenamiento verificados.
+     */
+    serial_write(
+        "NET: BINFS 3072 BYTES VERIFICADOS\n"
+    );
+
+    serial_write(
+        "NET: BINFS DOWNLOAD CHECKSUM OK\n"
+    );
+
+    serial_write(
+        "NET: HTTP 0.6B COMPLETADO!\n"
+    );
+
+    return 0;
+}
+
+/*
  * Declaracion adelantada:
  * la implementacion ya existe
  * mas abajo en kernel.c.
@@ -9792,6 +10116,45 @@ static int rtl8139_http_receive(
         /*
          * Respuesta HTTP completa.
          */
+        
+/*
+ * MiOS HTTP 0.6B.1
+ *
+ * Conservar el cuerpo HTTP completo
+ * fuera del buffer del receptor.
+ */
+const uint8_t *download_body =
+    http_buffer + response.body_offset;
+
+if (mios_download_prepare(
+        download_body,
+        response.body_length
+    ) != 0) {
+
+    serial_write(
+        "NET: DOWNLOAD PREPARE ERROR\n"
+    );
+
+    return -1;
+}
+
+if (mios_download_verify() != 0) {
+    serial_write(
+        "NET: DOWNLOAD CHECKSUM ERROR\n"
+    );
+    return -1;
+}
+
+serial_write(
+    "NET: DOWNLOAD BUFFER OK\n"
+);
+
+if (mios_download_size == 3072U) {
+    serial_write(
+        "NET: DOWNLOAD 3072 BYTES EN RAM\n"
+    );
+}
+
         *next_server_seq = server_seq;
 
         uint32_t preview_length =
@@ -11016,6 +11379,63 @@ if (framebuffer_map_prepare() == 0) {
 as_init();
 
     mios_fs_init();
+    
+/*
+ * Diagnostico BINFS de solo lectura.
+ * No modifica el disco.
+ */
+serial_write(
+    "BINFS DEBUG: CONSULTANDO CATALOGO\n"
+);
+
+int binfs_slots = binfs_count();
+
+if (binfs_slots < 0) {
+    serial_write(
+        "BINFS DEBUG: CATALOGO INVALIDO\n"
+    );
+} else {
+    serial_write(
+        "BINFS DEBUG: SLOTS = "
+    );
+
+    serial_write_hex32(
+        (uint32_t)binfs_slots
+    );
+
+    serial_write("\n");
+
+    for (int i = 0; i < binfs_slots; i++) {
+        BinfsEntry entry;
+
+        if (binfs_get_entry(
+                (uint32_t)i,
+                &entry
+            ) == 0) {
+
+            serial_write(
+                "BINFS DEBUG: ARCHIVO = "
+            );
+
+            /* Copia segura para imprimir */
+            char name[33];
+
+            for (uint32_t j = 0; j < 32U; j++)
+                name[j] = entry.name[j];
+
+            name[32] = '\0';
+
+            serial_write(name);
+            serial_write("\n");
+
+        } else {
+            serial_write(
+                "BINFS DEBUG: SLOT NO LEGIBLE\n"
+            );
+        }
+    }
+}
+
     /*
  * HTTP 0.6A:
  * Ejecutar red cuando MIOSFS ya esta inicializado.
@@ -11023,9 +11443,54 @@ as_init();
 if (mios_network_ready) {
     serial_write("NET: MIOSFS INICIALIZADO, INICIANDO HTTP\n");
 
-    if (rtl8139_dma_arp_test() != 0) {
-        serial_write("NET: PRUEBA HTTP/RED FALLO\n");
+    
+if (rtl8139_dma_arp_test() != 0) {
+
+    serial_write(
+        "NET: PRUEBA HTTP/RED FALLO\n"
+    );
+
+} else {
+
+    /*
+     * Verificar que el archivo completo
+     * sigue en RAM despues del cierre TCP.
+     */
+    if (mios_download_verify() == 0 &&
+        mios_download_size == 3072U) {
+
+        serial_write(
+            "NET: DOWNLOAD POST-TCP OK\n"
+        );
+
+/*
+ * HTTP 0.6B.2
+ *
+ * Guardar despues del cierre TCP.
+ */
+serial_write(
+    "NET: INICIANDO GUARDADO BINFS\n"
+);
+
+if (mios_download_save_binfs() != 0) {
+
+    serial_write(
+        "NET: HTTP BINFS SAVE FALLO\n"
+    );
+}
+
+       serial_write(
+    "NET: HTTP 0.6B.1 RAM COMPLETADO\n"
+);
+
+    } else {
+
+        serial_write(
+            "NET: DOWNLOAD POST-TCP ERROR\n"
+        );
     }
+}
+
 }
     memory_init();
     thread_init();

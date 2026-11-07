@@ -453,11 +453,15 @@ int binfs_get_entry(
  * Los datos se verifican antes de
  * publicar una nueva generacion A/B.
  */
-int binfs_copy_file(
-    const char *source,
-    const char *destination
+
+int binfs_create_from_buffer(
+    const char *destination,
+    const uint8_t *data,
+    uint32_t size
 ) {
-    if (source == 0 || destination == 0)
+    if (!destination || !data ||
+        size == 0U ||
+        size > BINFS_MAX_FILE_SIZE)
         return -1;
 
     /* Validar nombre destino */
@@ -481,37 +485,56 @@ int binfs_copy_file(
 
     uint32_t flags = irq_save();
 
-    /* Leer origen y verificar checksum */
-    uint32_t size = 0;
+  
 
-    if (binfs_read(
-            source,
-            copy_buffer,
-            sizeof(copy_buffer),
-            &size
-        ) != 0 ||
-        size == 0U ||
-        size > BINFS_MAX_FILE_SIZE) {
 
-        irq_restore(flags);
-        return -1;
-    }
+/*
+ * Copiar datos del llamador al buffer
+ * de trabajo que BINFS ya utiliza.
+ *
+ * Esto permite conservar el resto del
+ * algoritmo de escritura y verificacion.
+ */
+for (uint32_t i = 0U; i < size; i++) {
+    copy_buffer[i] = data[i];
+}
+
 
     /* Leer catalogo v2 vigente */
-    int slots = binfs_load_catalog();
+  
 
-    if (slots < 1 || slots > (int)BINFS_MAX_FILES) {
-        irq_restore(flags);
-        return -1;
-    }
+int slots = binfs_load_catalog();
 
-    uint32_t generation = read_u32(&catalog[480]);
+if (slots < 0) {
+    irq_restore(flags);
+    return -3;  /* Error al cargar catalogo */
+}
 
-    if (generation == 0U ||
-        generation == UINT32_MAX) {
-        irq_restore(flags);
-        return -1;
-    }
+if (slots == 0) {
+    irq_restore(flags);
+    return -6;  /* Catalogo sin posiciones */
+}
+
+if (slots > (int)BINFS_MAX_FILES) {
+    irq_restore(flags);
+    return -7;  /* Cantidad de slots invalida */
+}
+
+
+   /* serial_write(
+    "BINFS CREATE: CATALOGO OK\n"
+);*/
+
+   
+uint32_t generation = read_u32(&catalog[480]);
+
+if (generation == 0U ||
+    generation == UINT32_MAX) {
+
+    irq_restore(flags);
+    return -4;  /* Generacion invalida */
+}
+
 
     int free_slot = -1;
 
@@ -555,10 +578,17 @@ int binfs_copy_file(
      * version A/B solo reutiliza
      * posiciones eliminadas.
      */
-    if (free_slot < 0) {
-        irq_restore(flags);
-        return -1;
-    }
+    
+
+if (free_slot < 0) {
+    irq_restore(flags);
+    return -2;
+}
+
+
+/*serial_write(
+    "BINFS CREATE: SLOT ENCONTRADO\n"
+);*/
 
     uint32_t index = (uint32_t)free_slot;
 
@@ -670,14 +700,22 @@ int binfs_copy_file(
      * Publicar la nueva entrada usando
      * el catalogo A/B y su generacion.
      */
-    if (binfs_catalog_publish(
-            catalog,
-            generation
-        ) != 0) {
+   /*
+/* serial_write(
+    "BINFS CREATE: DATOS VERIFICADOS\n"
+);*/
 
-        irq_restore(flags);
-        return -1;
-    }
+
+
+if (binfs_catalog_publish(
+        catalog,
+        generation
+    ) != 0) {
+
+    irq_restore(flags);
+    return -5;  /* Publicacion A/B fallo */
+}
+
 
     /* Comprobar la nueva entrada visible */
     if (binfs_load_catalog() != slots) {
@@ -704,6 +742,53 @@ int binfs_copy_file(
 
     irq_restore(flags);
     return 0;
+}
+
+/*
+ * Copiar archivos BINFS.
+ *
+ * Conservamos la interfaz anterior,
+ * reutilizando la nueva escritura
+ * desde memoria.
+ */
+int binfs_copy_file(
+    const char *source,
+    const char *destination
+) {
+    if (!source || !destination)
+        return -1;
+
+    uint32_t size = 0U;
+
+    /*
+     * El buffer ya existe en BINFS.
+     * Primero leer origen completo.
+     */
+    if (binfs_read(
+            source,
+            copy_buffer,
+            sizeof(copy_buffer),
+            &size
+        ) != 0)
+        return -1;
+
+    if (size == 0U ||
+        size > BINFS_MAX_FILE_SIZE)
+        return -1;
+
+    /*
+     * La funcion de creacion vuelve
+     * a copiar los bytes al mismo
+     * buffer antes de escribir.
+     *
+     * Esta reutilizacion se limita
+     * al laboratorio monohilo.
+     */
+    return binfs_create_from_buffer(
+        destination,
+        copy_buffer,
+        size
+    );
 }
 
 
