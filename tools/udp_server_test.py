@@ -10,7 +10,7 @@ sock = socket.socket(
 )
 
 sock.bind((HOST, PORT))
-sock.settimeout(30)
+sock.settimeout(300)
 
 print("MIOS UDP SERVER: LISTO", flush=True)
 print("Escuchando en puerto 5555", flush=True)

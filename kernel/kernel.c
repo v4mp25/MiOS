@@ -6312,29 +6312,63 @@ static int rtl8139_ping_gateway(
     icmp[2] = (uint8_t)(checksum >> 8);
     icmp[3] = (uint8_t)checksum;
 
-    /* Enviar trama Ethernet de 60 bytes */
-    __asm__ volatile("" ::: "memory");
+  
+/* Enviar ping mediante TX1 */
+__asm__ volatile("" ::: "memory");
 
-    rtl8139_out32(io + 0x24,
-    (uint32_t)(uintptr_t)rtl_tx_buffer);
+rtl8139_out32(
+    io + 0x24,
+    (uint32_t)(uintptr_t)rtl_tx_buffer
+);
 
-    rtl8139_out32(io + 0x14, 60U);
+rtl8139_out32(
+    io + 0x14,
+    60U
+);
 
-    int sent = 0;
+int sent = 0;
 
-    for (uint32_t n = 0; n < 5000000U; n++) {
-        uint32_t tx = rtl8139_in32(io + 0x14);
+for (uint32_t n = 0; n < 5000000U; n++) {
+    uint32_t tx = rtl8139_in32(io + 0x14);
 
-        if (tx & 0x00008000U) {
-            sent = 1;
-            break;
-        }
+    if (tx & 0x00008000U) {
+        sent = 1;
+        break;
     }
+}
 
-    if (!sent) {
-        serial_write("NET: PING TX ERROR\n");
-        return -1;
-    }
+
+if (!sent) {
+    serial_write("NET: PING TX ERROR\n");
+
+    serial_write("NET: TSD0 = ");
+    serial_write_hex32(
+        rtl8139_in32(io + 0x10)
+    );
+    serial_write("\n");
+
+    serial_write("NET: TSD1 = ");
+    serial_write_hex32(
+        rtl8139_in32(io + 0x14)
+    );
+    serial_write("\n");
+
+    serial_write("NET: TSD2 = ");
+    serial_write_hex32(
+        rtl8139_in32(io + 0x18)
+    );
+    serial_write("\n");
+
+    serial_write("NET: TSD3 = ");
+    serial_write_hex32(
+        rtl8139_in32(io + 0x1C)
+    );
+    serial_write("\n");
+
+    return -1;
+}
+
+
 
     serial_write("NET: PING 10.0.2.2 ENVIADO\n");
 
@@ -6856,6 +6890,358 @@ static int rtl8139_udp_receive(
     return -1;
 }
 
+/*
+ * MiOS DNS - resolver MAC de 10.0.2.3
+ *
+ * Reutiliza el anillo RX existente.
+ * Se llama despues de finalizar UDP.
+ */
+static int rtl8139_dns_arp(
+    uint8_t dns_mac[6],
+    uint32_t *rx_offset
+) {
+    if (!dns_mac || !rx_offset ||
+        rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    /* Preparar ARP Request Ethernet */
+    for (uint32_t i = 0; i < 60U; i++)
+        rtl_tx_buffer[i] = 0;
+
+    for (uint32_t i = 0; i < 6U; i++) {
+        uint8_t mac =
+            rtl8139_in8(io + (uint16_t)i);
+
+        rtl_tx_buffer[i] = 0xFF;
+        rtl_tx_buffer[6U + i] = mac;
+        rtl_tx_buffer[22U + i] = mac;
+    }
+
+    /* EtherType ARP */
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x06;
+
+    /* Ethernet + IPv4 */
+    rtl_tx_buffer[14] = 0;
+    rtl_tx_buffer[15] = 1;
+    rtl_tx_buffer[16] = 0x08;
+    rtl_tx_buffer[17] = 0x00;
+
+    rtl_tx_buffer[18] = 6;
+    rtl_tx_buffer[19] = 4;
+
+    /* ARP Request */
+    rtl_tx_buffer[20] = 0;
+    rtl_tx_buffer[21] = 1;
+
+    /* Sender IP: 10.0.2.15 */
+    rtl_tx_buffer[28] = 10;
+    rtl_tx_buffer[29] = 0;
+    rtl_tx_buffer[30] = 2;
+    rtl_tx_buffer[31] = 15;
+
+    /* Target IP: 10.0.2.3 */
+    rtl_tx_buffer[38] = 10;
+    rtl_tx_buffer[39] = 0;
+    rtl_tx_buffer[40] = 2;
+    rtl_tx_buffer[41] = 3;
+
+    __asm__ volatile("" ::: "memory");
+
+   
+/*
+ * MiOS DNS ARP
+ *
+ * Secuencia:
+ * TX0: ARP gateway
+ * TX1: ICMP
+ * TX2: UDP
+ * TX3: ARP DNS
+ *
+ * TSAD3 = IO + 0x2C
+ * TSD3  = IO + 0x1C
+ */
+
+__asm__ volatile("" ::: "memory");
+
+/* Direccion DMA del paquete */
+rtl8139_out32(
+    io + 0x2C,
+    (uint32_t)(uintptr_t)rtl_tx_buffer
+);
+
+/* Enviar 60 bytes por TX3 */
+rtl8139_out32(
+    io + 0x1C,
+    60U
+);
+
+int sent = 0;
+
+for (uint32_t n = 0;
+     n < 5000000U;
+     n++) {
+
+    uint32_t tx =
+        rtl8139_in32(io + 0x1C);
+
+    /* TOK = transmision completada */
+    if (tx & 0x00008000U) {
+        sent = 1;
+        break;
+    }
+
+    /* TABT = transmision abortada */
+    if (tx & 0x40000000U)
+        break;
+}
+
+if (!sent) {
+    serial_write(
+        "NET: DNS ARP TX3 ERROR TSD3="
+    );
+
+    serial_write_hex32(
+        rtl8139_in32(io + 0x1C)
+    );
+
+    serial_write("\n");
+
+    return -1;
+}
+
+
+    serial_write(
+        "NET: ARP 10.0.2.3 ENVIADO\n"
+    );
+
+    for (uint32_t n = 0;
+         n < 100000000U;
+         n++) {
+
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        uint32_t offset = *rx_offset;
+
+        volatile uint8_t *packet =
+            &rtl_rx_buffer[offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 46U ||
+            length > 2048U ||
+            offset + 4U + length >
+                sizeof(rtl_rx_buffer)) {
+
+            serial_write(
+                "NET: DNS ARP RX ERROR\n"
+            );
+            return -1;
+        }
+
+        volatile uint8_t *frame =
+            packet + 4;
+
+        int found =
+            frame[12] == 0x08 &&
+            frame[13] == 0x06 &&
+            frame[14] == 0x00 &&
+            frame[15] == 0x01 &&
+            frame[16] == 0x08 &&
+            frame[17] == 0x00 &&
+            frame[18] == 6 &&
+            frame[19] == 4 &&
+            frame[20] == 0 &&
+            frame[21] == 2 &&
+            frame[28] == 10 &&
+            frame[29] == 0 &&
+            frame[30] == 2 &&
+            frame[31] == 3 &&
+            frame[38] == 10 &&
+            frame[39] == 0 &&
+            frame[40] == 2 &&
+            frame[41] == 15;
+
+        if (found) {
+            for (uint32_t i = 0; i < 6U; i++)
+                dns_mac[i] = frame[22U + i];
+        }
+
+        /* Avanzar anillo RX */
+        offset =
+            (offset + 4U + length + 3U)
+            & ~3U;
+
+        offset &= 8191U;
+        *rx_offset = offset;
+
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(offset - 16U)
+        );
+
+        rtl8139_out16(
+            io + 0x3E,
+            0x0001U
+        );
+
+        if (found) {
+            serial_write(
+                "NET: DNS ARP 10.0.2.3 OK\n"
+            );
+            return 0;
+        }
+    }
+
+    serial_write(
+        "NET: DNS ARP TIMEOUT\n"
+    );
+
+    return -1;
+}
+
+/*
+ * MiOS DNS: transmitir example.com
+ * a 10.0.2.3:53 por RTL8139.
+ */
+static int rtl8139_dns_send(
+    const uint8_t dns_mac[6]
+) {
+    if (!dns_mac || rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    uint8_t dns_query[128];
+
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dst_ip[4] = {
+        10, 0, 2, 3
+    };
+
+    int dns_size = net_dns_build_query(
+        dns_query,
+        sizeof(dns_query),
+        "example.com",
+        0x4D49
+    );
+
+    if (dns_size != 29) {
+        serial_write(
+            "NET: DNS BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    for (uint32_t i = 0;
+         i < sizeof(rtl_tx_buffer);
+         i++) {
+        rtl_tx_buffer[i] = 0;
+    }
+
+    /* Ethernet: MAC destino/origen */
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = dns_mac[i];
+
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(
+                io + (uint16_t)i
+            );
+    }
+
+    /* EtherType IPv4 */
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x00;
+
+    /* IPv4 + UDP + DNS */
+    int ip_size = net_udp_build_ipv4(
+        &rtl_tx_buffer[14],
+        sizeof(rtl_tx_buffer) - 14U,
+        src_ip,
+        dst_ip,
+        49153U,
+        53U,
+        dns_query,
+        (uint16_t)dns_size
+    );
+
+    if (ip_size != 57) {
+        serial_write(
+            "NET: DNS IPV4 ERROR\n"
+        );
+        return -1;
+    }
+
+    uint32_t frame_size =
+        14U + (uint32_t)ip_size;
+
+    if (frame_size < 60U)
+        frame_size = 60U;
+
+    __asm__ volatile("" ::: "memory");
+
+    /*
+     * Descriptor TX3:
+     * TSAD3 = IO + 0x2C
+     * TSD3  = IO + 0x1C
+     */
+   /* TX0: vuelve a estar disponible
+ * tras completar TX3.
+ */
+rtl8139_out32(
+    io + 0x20,
+    (uint32_t)(uintptr_t)rtl_tx_buffer
+);
+
+rtl8139_out32(io + 0x10, frame_size);
+
+    for (uint32_t n = 0;
+         n < 5000000U;
+         n++) {
+
+        uint32_t status =
+    rtl8139_in32(io + 0x10);
+
+        if (status & 0x00008000U) {
+            serial_write(
+                "NET: DNS QUERY example.com ENVIADA\n"
+            );
+
+            serial_write(
+                "NET: DNS DESTINO 10.0.2.3:53\n"
+            );
+
+            serial_write(
+                "NET: DNS TX OK\n"
+            );
+
+            return 0;
+        }
+
+        if (status & 0x40000000U)
+            break;
+    }
+
+    serial_write(
+        "NET: DNS TX ERROR\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -7103,11 +7489,39 @@ if (rtl8139_udp_receive(
     return -1;
 }
 
+
 serial_write(
     "NET: UDP INTERCAMBIO COMPLETO!\n"
 );
 
+/* Resolver MAC del DNS 10.0.2.3 */
+uint8_t dns_mac[6];
+
+if (rtl8139_dns_arp(
+        dns_mac,
+        &rx_offset
+    ) != 0) {
+
+    serial_write(
+        "NET: DNS ARP FALLO\n"
+    );
+    return -1;
+}
+
+/* Enviar consulta DNS real */
+if (rtl8139_dns_send(dns_mac) != 0) {
+    serial_write(
+        "NET: DNS CONSULTA FALLO\n"
+    );
+    return -1;
+}
+
+serial_write(
+    "NET: DNS CONSULTA TRANSMITIDA\n"
+);
+
 return 0;
+
 
 
 }
