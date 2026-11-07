@@ -8656,6 +8656,298 @@ static int rtl8139_tcp_ack_data(
     return -1;
 }
 
+/*
+ * MiOS TCP 0.6A
+ * Recibir FIN+ACK del servidor.
+ *
+ * expected_seq: siguiente byte esperado
+ *               despues de "MIOS TCP OK".
+ *
+ * next_seq: reconoce FIN, que consume
+ *           un numero de secuencia.
+ */
+static int rtl8139_tcp_receive_fin(
+    uint32_t *rx_offset,
+    uint32_t expected_seq,
+    uint32_t *next_seq
+) {
+    if (!rx_offset || !next_seq ||
+        rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    serial_write(
+        "NET: ESPERANDO TCP FIN...\n"
+    );
+
+    for (uint32_t n = 0;
+         n < 100000000U;
+         n++) {
+
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        uint32_t offset = *rx_offset;
+
+        if (offset >= 8192U)
+            return -1;
+
+        volatile uint8_t *packet =
+            &rtl_rx_buffer[offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 4U ||
+            length > 2048U ||
+            offset + 4U + length >
+                sizeof(rtl_rx_buffer)) {
+
+            serial_write(
+                "NET: TCP FIN RX ERROR\n"
+            );
+            return -1;
+        }
+
+        volatile uint8_t *frame = packet + 4;
+        uint32_t frame_size = length - 4U;
+
+        int fin_ok = 0;
+
+        if (frame_size >= 54U &&
+            frame[12] == 0x08U &&
+            frame[13] == 0x00U) {
+
+            volatile uint8_t *ip = frame + 14;
+
+            uint32_t ihl =
+                (uint32_t)(ip[0] & 15U) * 4U;
+
+            uint32_t ip_total =
+                mios_tcp_read16(ip + 2);
+
+            uint16_t fragment =
+                mios_tcp_read16(ip + 6);
+
+            if ((ip[0] >> 4) == 4U &&
+                ihl >= 20U &&
+                ihl <= 60U &&
+                frame_size >= 14U + ihl + 20U &&
+                ip_total >= ihl + 20U &&
+                ip_total <= frame_size - 14U &&
+                (fragment & 0x3FFFU) == 0U &&
+                ip[9] == 6U &&
+
+                ip[12] == 10U &&
+                ip[13] == 0U &&
+                ip[14] == 2U &&
+                ip[15] == 2U &&
+
+                ip[16] == 10U &&
+                ip[17] == 0U &&
+                ip[18] == 2U &&
+                ip[19] == 15U) {
+
+                volatile uint8_t *tcp = ip + ihl;
+
+                uint32_t tcp_len = ip_total - ihl;
+
+                uint32_t header_len =
+                    ((uint32_t)tcp[12] >> 4) * 4U;
+
+                uint16_t src_port =
+                    mios_tcp_read16(tcp);
+
+                uint16_t dst_port =
+                    mios_tcp_read16(tcp + 2);
+
+                uint32_t seq =
+                    mios_tcp_read32(tcp + 4);
+
+                uint32_t ack =
+                    mios_tcp_read32(tcp + 8);
+
+                uint8_t flags = tcp[13];
+
+                if (header_len >= 20U &&
+                    header_len <= tcp_len &&
+                    src_port == 8080U &&
+                    dst_port == 49154U &&
+                    seq == expected_seq &&
+                    ack == 0x12345686U &&
+
+                    /* FIN y ACK activos */
+                    (flags & 0x11U) == 0x11U &&
+
+                    /* Sin SYN ni RST */
+                    (flags & 0x06U) == 0U &&
+
+                    /* FIN sin datos adicionales */
+                    tcp_len == header_len &&
+
+                    mios_tcp_checksum_valid(
+                        ip, tcp, tcp_len
+                    )) {
+
+                    *next_seq = seq + 1U;
+                    fin_ok = 1;
+                }
+            }
+        }
+
+        /* Avanzar el anillo RX */
+        offset =
+            (offset + 4U + length + 3U)
+            & ~3U;
+
+        offset &= 8191U;
+
+        *rx_offset = offset;
+
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(offset - 16U)
+        );
+
+        rtl8139_out16(
+            io + 0x3E,
+            0x0001U
+        );
+
+        if (fin_ok) {
+            serial_write(
+                "NET: TCP FIN RECIBIDO!\n"
+            );
+
+            serial_write(
+                "NET: TCP FIN CHECKSUM OK\n"
+            );
+
+            serial_write(
+                "NET: TCP FIN SEQUENCE OK\n"
+            );
+
+            return 0;
+        }
+    }
+
+    serial_write(
+        "NET: TCP FIN TIMEOUT\n"
+    );
+
+    return -1;
+}
+
+/*
+ * MiOS TCP 0.6A
+ * Reconocer FIN del servidor.
+ *
+ * TX1 sigue a TX0, usado para
+ * reconocer "MIOS TCP OK".
+ */
+static int rtl8139_tcp_ack_fin(
+    const uint8_t gateway_mac[6],
+    uint32_t server_next_seq
+) {
+    if (!gateway_mac ||
+        rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    const uint8_t src_ip[4] = {10, 0, 2, 15};
+    const uint8_t dst_ip[4] = {10, 0, 2, 2};
+
+    for (uint32_t i = 0;
+         i < sizeof(rtl_tx_buffer);
+         i++)
+        rtl_tx_buffer[i] = 0;
+
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = gateway_mac[i];
+
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(io + (uint16_t)i);
+    }
+
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x00;
+
+    /*
+     * MiOS:
+     * SYN consume 1
+     * 13 bytes de datos
+     *
+     * SEQ = 0x12345686
+     * ACK = siguiente SEQ tras FIN
+     */
+    int size = net_tcp_build_ack(
+        &rtl_tx_buffer[14],
+        sizeof(rtl_tx_buffer) - 14U,
+        src_ip,
+        dst_ip,
+        49154U,
+        8080U,
+        0x12345686U,
+        server_next_seq
+    );
+
+    if (size != 40) {
+        serial_write(
+            "NET: TCP FIN ACK BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    __asm__ volatile("" ::: "memory");
+
+    /* RTL8139 TX1 */
+    rtl8139_out32(
+        io + 0x24,
+        (uint32_t)(uintptr_t)rtl_tx_buffer
+    );
+
+    rtl8139_out32(
+        io + 0x14,
+        60U
+    );
+
+    for (uint32_t n = 0;
+         n < 5000000U;
+         n++) {
+
+        uint32_t status =
+            rtl8139_in32(io + 0x14);
+
+        if (status & 0x00008000U) {
+            serial_write(
+                "NET: TCP FIN ACK ENVIADO\n"
+            );
+            return 0;
+        }
+
+        if (status & 0x40000000U) {
+            serial_write(
+                "NET: TCP FIN ACK ABORTADO\n"
+            );
+            return -1;
+        }
+    }
+
+    serial_write(
+        "NET: TCP FIN ACK TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -9098,6 +9390,42 @@ serial_write(
 
     serial_write(
         "NET: TCP 0.5B COMPLETADO!\n"
+    );
+
+    /*
+     * MiOS TCP 0.6A
+     * Reconocer cierre del servidor.
+     */
+
+    uint32_t tcp_next_seq_after_fin = 0;
+
+    if (rtl8139_tcp_receive_fin(
+            &rx_offset,
+            tcp_next_seq_after_data,
+            &tcp_next_seq_after_fin
+        ) != 0) {
+
+        serial_write(
+            "NET: TCP FIN RX FALLO\n"
+        );
+
+        return -1;
+    }
+
+    if (rtl8139_tcp_ack_fin(
+            gateway_mac,
+            tcp_next_seq_after_fin
+        ) != 0) {
+
+        serial_write(
+            "NET: TCP FIN ACK ERROR\n"
+        );
+
+        return -1;
+    }
+
+    serial_write(
+        "NET: TCP 0.6A COMPLETADO!\n"
     );
 
 return 0;
