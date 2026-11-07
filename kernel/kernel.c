@@ -11254,6 +11254,61 @@ return 0;
     return -1;
 }
 
+/*
+ * MiOS HTTP 0.7A
+ *
+ * Funcion reutilizable de descarga.
+ * Servidor de laboratorio: 10.0.2.2:8080.
+ */
+static int mios_download_run_lab(void)
+{
+    serial_write(
+        "\n=== MiOS DOWNLOAD 0.7A ===\n"
+    );
+
+    if (rtl8139_dma_arp_test() != 0) {
+
+        serial_write(
+            "DOWNLOAD: ERROR DE RED/HTTP\n"
+        );
+
+        return -1;
+    }
+
+    if (mios_download_verify() != 0 ||
+        mios_download_size != 3072U) {
+
+        serial_write(
+            "DOWNLOAD: DATOS INVALIDOS\n"
+        );
+
+        return -1;
+    }
+
+    serial_write(
+        "DOWNLOAD: DATOS EN RAM OK\n"
+    );
+
+    if (mios_download_save_binfs() != 0) {
+
+        serial_write(
+            "DOWNLOAD: ERROR ALMACENAMIENTO\n"
+        );
+
+        return -1;
+    }
+
+    serial_write(
+        "DOWNLOAD: ARCHIVO BINFS OK\n"
+    );
+
+    serial_write(
+        "DOWNLOAD: 0.7A COMPLETADO!\n"
+    );
+
+    return 0;
+}
+
 void kernel_main(uint32_t multiboot_magic,
     uint32_t multiboot_info) {
         
@@ -11529,16 +11584,31 @@ if (binfs_slots < 0) {
  * leer http3072.bin desde BINFS
  * sin ejecutar las pruebas de red.
  */
-serial_write(
-    "NET: MODO DESCARGA OFFLINE\n"
-);
 
-if (mios_download_offline_test() != 0) {
+/*
+ * MiOS HTTP 0.7A
+ * Ejecutar descarga mediante
+ * una funcion independiente.
+ */
+serial_write(
+    "NET: HTTP 0.7A MODO DESCARGA\n"
+);
+if (mios_network_ready) {
+
+    if (mios_download_run_lab() != 0) {
+
+        serial_write(
+            "NET: HTTP 0.7A FALLO\n"
+        );
+    }
+
+} else {
 
     serial_write(
-        "NET: HTTP OFFLINE TEST FALLO\n"
+        "NET: RTL8139 NO DISPONIBLE\n"
     );
 }
+
 
     memory_init();
     thread_init();
