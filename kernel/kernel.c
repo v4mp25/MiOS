@@ -8316,6 +8316,346 @@ static int rtl8139_tcp_send_data(
     return -1;
 }
 
+/*
+ * MiOS TCP 0.5B
+ *
+ * Recibe "MIOS TCP OK" desde Ubuntu.
+ * Valida TCP, SEQ, ACK y checksum.
+ *
+ * No procesa FIN todavia.
+ */
+static int rtl8139_tcp_receive_data(
+    uint32_t *rx_offset,
+    uint32_t server_next_seq,
+    uint32_t *new_server_seq
+) {
+    if (!rx_offset || !new_server_seq ||
+        rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    const uint8_t expected[] = {
+        'M', 'I', 'O', 'S', ' ',
+        'T', 'C', 'P', ' ',
+        'O', 'K'
+    };
+
+    serial_write(
+        "NET: ESPERANDO TCP DATA...\n"
+    );
+
+    for (uint32_t n = 0;
+         n < 100000000U;
+         n++) {
+
+        /* BUFE=1: no hay paquetes */
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        uint32_t offset = *rx_offset;
+
+        if (offset >= 8192U) {
+            serial_write(
+                "NET: TCP RX OFFSET ERROR\n"
+            );
+            return -1;
+        }
+
+        volatile uint8_t *packet =
+            &rtl_rx_buffer[offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 4U ||
+            length > 2048U ||
+            offset + 4U + length >
+                sizeof(rtl_rx_buffer)) {
+
+            serial_write(
+                "NET: TCP DATA RX ERROR\n"
+            );
+            return -1;
+        }
+
+        volatile uint8_t *frame =
+            packet + 4U;
+
+        uint32_t frame_size =
+            (uint32_t)length - 4U;
+
+        int data_ok = 0;
+        uint32_t next_seq = 0;
+
+        if (frame_size >= 54U &&
+            frame[12] == 0x08U &&
+            frame[13] == 0x00U) {
+
+            volatile uint8_t *ip =
+                frame + 14U;
+
+            uint32_t ihl =
+                (uint32_t)(ip[0] & 15U) * 4U;
+
+            uint32_t ip_total =
+                mios_tcp_read16(ip + 2U);
+
+            uint16_t fragment =
+                mios_tcp_read16(ip + 6U);
+
+            if ((ip[0] >> 4) == 4U &&
+                ihl >= 20U &&
+                ihl <= 60U &&
+                frame_size >= 14U + ihl + 20U &&
+                ip_total >= ihl + 20U &&
+                ip_total <= frame_size - 14U &&
+                (fragment & 0x3FFFU) == 0U &&
+                ip[9] == 6U &&
+
+                /* IP origen: servidor */
+                ip[12] == 10U &&
+                ip[13] == 0U &&
+                ip[14] == 2U &&
+                ip[15] == 2U &&
+
+                /* IP destino: MiOS */
+                ip[16] == 10U &&
+                ip[17] == 0U &&
+                ip[18] == 2U &&
+                ip[19] == 15U) {
+
+                volatile uint8_t *tcp =
+                    ip + ihl;
+
+                uint32_t tcp_len =
+                    ip_total - ihl;
+
+                uint32_t tcp_header_len =
+                    ((uint32_t)tcp[12] >> 4)
+                    * 4U;
+
+                uint16_t src_port =
+                    mios_tcp_read16(tcp);
+
+                uint16_t dst_port =
+                    mios_tcp_read16(tcp + 2U);
+
+                uint32_t seq =
+                    mios_tcp_read32(tcp + 4U);
+
+                uint32_t ack =
+                    mios_tcp_read32(tcp + 8U);
+
+                uint8_t flags = tcp[13];
+
+                if (tcp_header_len >= 20U &&
+                    tcp_header_len <= tcp_len &&
+                    src_port == 8080U &&
+                    dst_port == 49154U &&
+                    (flags & 0x10U) != 0U &&
+                    (flags & 0x06U) == 0U &&
+                    seq == server_next_seq &&
+                    ack == 0x12345686U &&
+                    tcp_len - tcp_header_len ==
+                        sizeof(expected) &&
+                    mios_tcp_checksum_valid(
+                        ip, tcp, tcp_len
+                    )) {
+
+                    volatile uint8_t *data =
+                        tcp + tcp_header_len;
+
+                    data_ok = 1;
+
+                    for (uint32_t i = 0;
+                         i < sizeof(expected);
+                         i++) {
+
+                        if (data[i] != expected[i]) {
+                            data_ok = 0;
+                            break;
+                        }
+                    }
+
+                    if (data_ok) {
+                        next_seq =
+                            seq + sizeof(expected);
+                    }
+                }
+            }
+        }
+
+        /*
+         * Liberar paquete procesado.
+         * Misma logica RX que UDP y DNS.
+         */
+        offset =
+            (offset + 4U + length + 3U)
+            & ~3U;
+
+        offset &= 8191U;
+        *rx_offset = offset;
+
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(offset - 16U)
+        );
+
+        rtl8139_out16(
+            io + 0x3E,
+            0x0001U
+        );
+
+        if (data_ok) {
+            *new_server_seq = next_seq;
+
+            serial_write(
+                "NET: TCP DATA RECIBIDA!\n"
+            );
+
+            serial_write(
+                "NET: TCP CHECKSUM DATA OK\n"
+            );
+
+            serial_write(
+                "NET: TCP MENSAJE MIOS TCP OK\n"
+            );
+
+            serial_write(
+                "NET: TCP DATA RX OK\n"
+            );
+
+            return 0;
+        }
+    }
+
+    serial_write(
+        "NET: TCP DATA RX TIMEOUT\n"
+    );
+
+    return -1;
+}
+
+/*
+ * MiOS TCP 0.5B
+ * Reconocer los 11 bytes recibidos.
+ *
+ * TX0 sigue a TX3, usado para DATA.
+ */
+static int rtl8139_tcp_ack_data(
+    const uint8_t gateway_mac[6],
+    uint32_t server_next_seq
+) {
+    if (!gateway_mac ||
+        rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dst_ip[4] = {
+        10, 0, 2, 2
+    };
+
+    for (uint32_t i = 0;
+         i < sizeof(rtl_tx_buffer);
+         i++) {
+        rtl_tx_buffer[i] = 0;
+    }
+
+    /* Ethernet */
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = gateway_mac[i];
+
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(
+                io + (uint16_t)i
+            );
+    }
+
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x00;
+
+    /*
+     * MiOS consumio:
+     * 1 byte de SYN + 13 bytes de datos.
+     *
+     * SEQ = 0x12345686
+     * ACK = server_next_seq + 11
+     */
+    int ip_size = net_tcp_build_ack(
+        &rtl_tx_buffer[14],
+        sizeof(rtl_tx_buffer) - 14U,
+        src_ip,
+        dst_ip,
+        49154U,
+        8080U,
+        0x12345686U,
+        server_next_seq
+    );
+
+    if (ip_size != 40) {
+        serial_write(
+            "NET: TCP DATA ACK BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    /* Ethernet minimo: 60 bytes */
+    uint32_t frame_size = 60U;
+
+    __asm__ volatile("" ::: "memory");
+
+    /* TX0: TSAD0 y TSD0 */
+    rtl8139_out32(
+        io + 0x20,
+        (uint32_t)(uintptr_t)rtl_tx_buffer
+    );
+
+    rtl8139_out32(
+        io + 0x10,
+        frame_size
+    );
+
+    for (uint32_t n = 0;
+         n < 5000000U;
+         n++) {
+
+        uint32_t status =
+            rtl8139_in32(io + 0x10);
+
+        if (status & 0x00008000U) {
+            serial_write(
+                "NET: TCP DATA ACK ENVIADO\n"
+            );
+            return 0;
+        }
+
+        if (status & 0x40000000U) {
+            serial_write(
+                "NET: TCP DATA ACK ABORTADO\n"
+            );
+            return -1;
+        }
+    }
+
+    serial_write(
+        "NET: TCP DATA ACK TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -8722,6 +9062,42 @@ serial_write(
 
     serial_write(
         "NET: TCP 0.5A TRANSMISION COMPLETA\n"
+    );
+
+    /*
+     * MiOS TCP 0.5B
+     * Recibir respuesta y reconocer datos.
+     */
+
+    uint32_t tcp_next_seq_after_data = 0;
+
+    if (rtl8139_tcp_receive_data(
+            &rx_offset,
+            tcp_server_next_seq,
+            &tcp_next_seq_after_data
+        ) != 0) {
+
+        serial_write(
+            "NET: TCP DATA RX FALLO\n"
+        );
+
+        return -1;
+    }
+
+    if (rtl8139_tcp_ack_data(
+            gateway_mac,
+            tcp_next_seq_after_data
+        ) != 0) {
+
+        serial_write(
+            "NET: TCP DATA ACK ERROR\n"
+        );
+
+        return -1;
+    }
+
+    serial_write(
+        "NET: TCP 0.5B COMPLETADO!\n"
     );
 
 return 0;
