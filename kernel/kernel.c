@@ -7642,6 +7642,139 @@ static int rtl8139_dns_receive(
     return -1;
 }
 
+/*
+ * MiOS TCP 0.2
+ * Enviar SYN hacia el servidor
+ * TCP de Ubuntu mediante RTL8139.
+ *
+ * Se ejecuta despues de:
+ * TX0 ARP gateway
+ * TX1 ICMP
+ * TX2 UDP
+ * TX3 ARP DNS
+ * TX0 consulta DNS
+ *
+ * Siguiente descriptor: TX1.
+ */
+static int rtl8139_tcp_send_syn(
+    const uint8_t gateway_mac[6]
+) {
+    if (!gateway_mac || rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dst_ip[4] = {
+        10, 0, 2, 2
+    };
+
+    /* Limpiar buffer de transmision */
+    for (uint32_t i = 0;
+         i < sizeof(rtl_tx_buffer);
+         i++) {
+        rtl_tx_buffer[i] = 0;
+    }
+
+    /* Cabecera Ethernet */
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = gateway_mac[i];
+
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(
+                io + (uint16_t)i
+            );
+    }
+
+    /* EtherType IPv4 */
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x00;
+
+    /* Construir IPv4 + TCP SYN */
+    int ip_size = net_tcp_build_syn(
+        &rtl_tx_buffer[14],
+        sizeof(rtl_tx_buffer) - 14U,
+        src_ip,
+        dst_ip,
+        49154U,
+        8080U,
+        0x12345678U
+    );
+
+    if (ip_size != 40) {
+        serial_write(
+            "NET: TCP SYN BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    uint32_t frame_size =
+        14U + (uint32_t)ip_size;
+
+    /* Longitud minima Ethernet sin FCS */
+    if (frame_size < 60U)
+        frame_size = 60U;
+
+    __asm__ volatile("" ::: "memory");
+
+    /*
+     * TX1 de RTL8139
+     * TSAD1 = IO + 0x24
+     * TSD1  = IO + 0x14
+     */
+    rtl8139_out32(
+        io + 0x24,
+        (uint32_t)(uintptr_t)rtl_tx_buffer
+    );
+
+    rtl8139_out32(
+        io + 0x14,
+        frame_size
+    );
+
+    for (uint32_t n = 0;
+         n < 5000000U;
+         n++) {
+
+        uint32_t status =
+            rtl8139_in32(io + 0x14);
+
+        /* TOK: transmision completada */
+        if (status & 0x00008000U) {
+            serial_write(
+                "NET: TCP SYN ENVIADO\n"
+            );
+
+            serial_write(
+                "NET: TCP DESTINO 10.0.2.2:8080\n"
+            );
+
+            serial_write(
+                "NET: TCP TX OK\n"
+            );
+
+            return 0;
+        }
+
+        /* TABT: transmision abortada */
+        if (status & 0x40000000U) {
+            serial_write(
+                "NET: TCP TX ABORTADA\n"
+            );
+            return -1;
+        }
+    }
+
+    serial_write(
+        "NET: TCP TX TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -7935,6 +8068,32 @@ if (rtl8139_dns_receive(
 
 serial_write(
     "NET: DNS RESOLUCION COMPLETA!\n"
+);
+
+/*
+ * MiOS TCP 0.2
+ * Primer SYN real.
+ *
+ * gateway_mac fue obtenido
+ * durante la resolucion ARP inicial.
+ */
+serial_write(
+    "NET: PREPARANDO TCP SYN REAL\n"
+);
+
+if (rtl8139_tcp_send_syn(
+        gateway_mac
+    ) != 0) {
+
+    serial_write(
+        "NET: TCP SYN ERROR\n"
+    );
+
+    return -1;
+}
+
+serial_write(
+    "NET: TCP 0.2 TRANSMISION COMPLETA\n"
 );
 
 return 0;
