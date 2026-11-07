@@ -7242,6 +7242,405 @@ rtl8139_out32(io + 0x10, frame_size);
     return -1;
 }
 
+/*
+ * MiOS DNS RX 0.4A.6
+ * Funciones auxiliares.
+ */
+
+static uint16_t mios_dns_read16(
+    const volatile uint8_t *p
+) {
+    return (uint16_t)(
+        ((uint16_t)p[0] << 8) |
+        (uint16_t)p[1]
+    );
+}
+
+/* Imprimir numeros decimales por COM1 */
+static void mios_dns_print_uint(
+    uint32_t value
+) {
+    char buffer[11];
+    char result[12];
+    uint32_t n = 0;
+    uint32_t j = 0;
+
+    do {
+        buffer[n++] =
+            '0' + (char)(value % 10U);
+
+        value /= 10U;
+    } while (value && n < 10U);
+
+    while (n) {
+        result[j++] = buffer[--n];
+    }
+
+    result[j] = '\0';
+    serial_write(result);
+}
+
+/*
+ * Avanzar sobre un nombre DNS.
+ *
+ * Permite etiquetas normales y punteros
+ * de compresion hacia posiciones anteriores.
+ *
+ * No expande el nombre; solo encuentra
+ * el inicio del siguiente campo.
+ */
+static int mios_dns_skip_name(
+    const volatile uint8_t *dns,
+    uint32_t size,
+    uint32_t *position
+) {
+    if (!dns || !position)
+        return -1;
+
+    uint32_t pos = *position;
+
+    for (uint32_t steps = 0;
+         steps < 128U;
+         steps++) {
+
+        if (pos >= size)
+            return -1;
+
+        uint8_t length = dns[pos];
+
+        if (length == 0U) {
+            *position = pos + 1U;
+            return 0;
+        }
+
+        if ((length & 0xC0U) == 0xC0U) {
+            if (pos + 2U > size)
+                return -1;
+
+            uint32_t target =
+                ((uint32_t)(length & 0x3FU) << 8) |
+                dns[pos + 1U];
+
+            if (target < 12U ||
+                target >= pos)
+                return -1;
+
+            *position = pos + 2U;
+            return 0;
+        }
+
+        if (length & 0xC0U)
+            return -1;
+
+        if (length > 63U ||
+            (uint32_t)length > size - pos - 1U)
+            return -1;
+
+        pos += 1U + (uint32_t)length;
+    }
+
+    return -1;
+}
+
+/*
+ * Interpretar respuesta A de example.com.
+ *
+ * Retorna:
+ *  0 = registro IPv4 encontrado
+ * -1 = respuesta invalida o sin registro A
+ */
+static int mios_dns_parse_a(
+    const volatile uint8_t *dns,
+    uint32_t size,
+    uint8_t ip_out[4]
+) {
+    if (!dns || !ip_out || size < 29U)
+        return -1;
+
+    /* La consulta enviada usa ID 0x4D49 */
+    if (mios_dns_read16(dns) != 0x4D49U)
+        return -1;
+
+    uint16_t flags = mios_dns_read16(dns + 2);
+
+    /* QR=1: respuesta; opcode=0; RCODE=0 */
+    if ((flags & 0x8000U) == 0U ||
+        (flags & 0x7800U) != 0U ||
+        (flags & 0x000FU) != 0U)
+        return -1;
+
+    uint16_t questions =
+        mios_dns_read16(dns + 4);
+
+    uint16_t answers =
+        mios_dns_read16(dns + 6);
+
+    if (questions != 1U || answers == 0U)
+        return -1;
+
+    /*
+     * Verificar pregunta exacta:
+     * 07 example 03 com 00
+     */
+    static const uint8_t qname[] = {
+        7, 'e', 'x', 'a', 'm', 'p', 'l', 'e',
+        3, 'c', 'o', 'm', 0
+    };
+
+    for (uint32_t i = 0;
+         i < sizeof(qname);
+         i++) {
+
+        uint8_t actual = dns[12U + i];
+        uint8_t expected = qname[i];
+
+        /* Aceptar mayusculas en letras ASCII */
+        if (actual >= 'A' && actual <= 'Z')
+            actual = (uint8_t)(actual + 32U);
+
+        if (actual != expected)
+            return -1;
+    }
+
+    /* QTYPE=A, QCLASS=IN */
+    if (mios_dns_read16(dns + 25) != 1U ||
+        mios_dns_read16(dns + 27) != 1U)
+        return -1;
+
+    uint32_t pos = 29U;
+
+    for (uint32_t i = 0;
+         i < (uint32_t)answers;
+         i++) {
+
+        if (mios_dns_skip_name(
+                dns, size, &pos
+            ) != 0)
+            return -1;
+
+        /* TYPE + CLASS + TTL + RDLENGTH */
+        if (pos > size ||
+            size - pos < 10U)
+            return -1;
+
+        uint16_t type =
+            mios_dns_read16(dns + pos);
+
+        uint16_t dns_class =
+            mios_dns_read16(dns + pos + 2U);
+
+        uint16_t data_size =
+            mios_dns_read16(dns + pos + 8U);
+
+        pos += 10U;
+
+        if (data_size > size - pos)
+            return -1;
+
+        /* Registro A, clase IN, 4 bytes */
+        if (type == 1U &&
+            dns_class == 1U &&
+            data_size == 4U) {
+
+            for (uint32_t j = 0; j < 4U; j++)
+                ip_out[j] = dns[pos + j];
+
+            return 0;
+        }
+
+        pos += data_size;
+    }
+
+    return -1;
+}
+
+/*
+ * MiOS Network 0.4A.6
+ * Recibir respuesta DNS por UDP.
+ */
+static int rtl8139_dns_receive(
+    uint32_t *rx_offset
+) {
+    if (!rx_offset || rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    serial_write(
+        "NET: ESPERANDO RESPUESTA DNS...\n"
+    );
+
+    for (uint32_t n = 0;
+         n < 100000000U;
+         n++) {
+
+        /* No hay paquetes disponibles */
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        uint32_t offset = *rx_offset;
+
+        volatile uint8_t *packet =
+            &rtl_rx_buffer[offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 4U ||
+            length > 2048U ||
+            offset + 4U + length >
+                sizeof(rtl_rx_buffer)) {
+
+            serial_write(
+                "NET: DNS RX PACKET ERROR\n"
+            );
+
+            return -1;
+        }
+
+        volatile uint8_t *frame = packet + 4;
+
+        /* Los ultimos 4 bytes son FCS */
+        uint32_t frame_size =
+            (uint32_t)length - 4U;
+
+        int found = 0;
+        uint8_t result_ip[4] = {0, 0, 0, 0};
+
+        if (frame_size >= 42U &&
+            frame[12] == 0x08 &&
+            frame[13] == 0x00) {
+
+            volatile uint8_t *ip =
+                frame + 14;
+
+            uint32_t ihl =
+                (uint32_t)(ip[0] & 15U) * 4U;
+
+            uint32_t ip_total =
+                ((uint32_t)ip[2] << 8) |
+                ip[3];
+
+            uint16_t fragment =
+                mios_dns_read16(ip + 6);
+
+            if ((ip[0] >> 4) == 4U &&
+                ihl >= 20U &&
+                ihl <= 60U &&
+                frame_size >= 14U + ihl + 8U &&
+                ip_total >= ihl + 8U &&
+                ip_total <= frame_size - 14U &&
+                (fragment & 0x3FFFU) == 0U &&
+                ip[9] == 17U &&
+
+                /* Servidor DNS 10.0.2.3 */
+                ip[12] == 10 &&
+                ip[13] == 0 &&
+                ip[14] == 2 &&
+                ip[15] == 3 &&
+
+                /* MiOS 10.0.2.15 */
+                ip[16] == 10 &&
+                ip[17] == 0 &&
+                ip[18] == 2 &&
+                ip[19] == 15) {
+
+                volatile uint8_t *udp =
+                    ip + ihl;
+
+                uint16_t source_port =
+                    mios_dns_read16(udp);
+
+                uint16_t destination_port =
+                    mios_dns_read16(udp + 2);
+
+                uint16_t udp_length =
+                    mios_dns_read16(udp + 4);
+
+                if (source_port == 53U &&
+                    destination_port == 49153U &&
+                    udp_length >= 8U + 29U &&
+                    udp_length <= ip_total - ihl) {
+
+                    volatile uint8_t *dns =
+                        udp + 8;
+
+                    uint32_t dns_size =
+                        (uint32_t)udp_length - 8U;
+
+                    if (mios_dns_parse_a(
+                            dns,
+                            dns_size,
+                            result_ip
+                        ) == 0) {
+
+                        found = 1;
+                    }
+                }
+            }
+        }
+
+        /*
+         * Liberar el paquete del anillo RX,
+         * aunque no sea la respuesta buscada.
+         */
+        offset =
+            (offset + 4U + length + 3U)
+            & ~3U;
+
+        offset &= 8191U;
+        *rx_offset = offset;
+
+        /* CAPR */
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(offset - 16U)
+        );
+
+        /* Confirmacion de recepcion */
+        rtl8139_out16(
+            io + 0x3E,
+            0x0001U
+        );
+
+        if (found) {
+            serial_write(
+                "NET: DNS RESPUESTA RECIBIDA!\n"
+            );
+
+            serial_write(
+                "NET: DNS example.com RESUELTO\n"
+            );
+
+            serial_write(
+                "NET: DNS IPv4 = "
+            );
+
+            for (uint32_t j = 0; j < 4U; j++) {
+                mios_dns_print_uint(result_ip[j]);
+
+                if (j != 3U)
+                    serial_write(".");
+            }
+
+            serial_write("\n");
+            serial_write("NET: DNS RX OK\n");
+
+            return 0;
+        }
+    }
+
+    serial_write("NET: DNS RX TIMEOUT\n");
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -7509,6 +7908,7 @@ if (rtl8139_dns_arp(
 }
 
 /* Enviar consulta DNS real */
+
 if (rtl8139_dns_send(dns_mac) != 0) {
     serial_write(
         "NET: DNS CONSULTA FALLO\n"
@@ -7520,7 +7920,24 @@ serial_write(
     "NET: DNS CONSULTA TRANSMITIDA\n"
 );
 
+/* Leer respuesta DNS del mismo anillo RX */
+if (rtl8139_dns_receive(
+        &rx_offset
+    ) != 0) {
+
+    serial_write(
+        "NET: DNS RESOLUCION FALLO\n"
+    );
+
+    return -1;
+}
+
+serial_write(
+    "NET: DNS RESOLUCION COMPLETA!\n"
+);
+
 return 0;
+
 
 
 
