@@ -60,7 +60,12 @@ static void imprimir_numero(uint32_t numero);
 #define BUFFER_SIZE 128
 #define OUTPUT_SIZE 4096
 #define PATH_SIZE 128
-
+/*
+ * Prueba HTTP:
+ * 1 = transmitir GET y detener la prueba TCP.
+ * 0 = continuar con la recepcion TCP antigua.
+ */
+#define MIOS_HTTP_TX_ONLY 1
 static volatile uint16_t *const VGA = (volatile uint16_t *)0xB8000;
 static size_t fila = 0, columna = 0;
 static uint8_t color = 0x0F;
@@ -8207,11 +8212,29 @@ static int rtl8139_tcp_send_data(
         10, 0, 2, 2
     };
 
-    const uint8_t message[] = {
-        'H', 'O', 'L', 'A', ' ',
-        'T', 'C', 'P', ' ',
-        'M', 'I', 'O', 'S'
-    };
+    
+/*
+ * MiOS HTTP 0.2
+ * Construir una solicitud GET real.
+ */
+uint8_t http_request[256];
+
+int http_length = net_http_build_get(
+    http_request,
+    sizeof(http_request)
+);
+
+if (http_length <= 0) {
+    serial_write(
+        "NET: HTTP BUILD ERROR\n"
+    );
+    return -1;
+}
+
+serial_write(
+    "NET: HTTP GET PREPARADO\n"
+);
+
 
     /* Limpiar TX DMA */
     for (uint32_t i = 0;
@@ -8237,20 +8260,22 @@ static int rtl8139_tcp_send_data(
      * SEQ = SYN inicial + 1
      * ACK = siguiente SEQ del servidor
      */
-    int ip_size = net_tcp_build_data(
-        &rtl_tx_buffer[14],
-        sizeof(rtl_tx_buffer) - 14U,
-        src_ip,
-        dst_ip,
-        49154U,
-        8080U,
-        0x12345679U,
-        server_next_seq,
-        message,
-        (uint16_t)sizeof(message)
-    );
+    
+int ip_size = net_tcp_build_data(
+    &rtl_tx_buffer[14],
+    sizeof(rtl_tx_buffer) - 14U,
+    src_ip,
+    dst_ip,
+    49154U,
+    8080U,
+    0x12345679U,
+    server_next_seq,
+    http_request,
+    (uint16_t)http_length
+);
 
-    if (ip_size != 53) {
+
+    if (ip_size != 40 + http_length) {
         serial_write(
             "NET: TCP DATA BUILD ERROR\n"
         );
@@ -8295,9 +8320,13 @@ static int rtl8139_tcp_send_data(
                 "NET: TCP DATA TX OK\n"
             );
 
-            serial_write(
-                "NET: TCP MENSAJE HOLA TCP MIOS\n"
-            );
+          serial_write(
+    "NET: HTTP GET ENVIADO\n"
+);
+
+serial_write(
+    "NET: HTTP DESTINO 10.0.2.2:8080\n"
+);
 
             return 0;
         }
@@ -9669,6 +9698,27 @@ serial_write(
 
         return -1;
     }
+
+#if MIOS_HTTP_TX_ONLY
+
+serial_write(
+    "NET: HTTP GET TRANSMITIDO\n"
+);
+
+serial_write(
+    "NET: HTTP 0.2 TX COMPLETADO\n"
+);
+
+/*
+ * Terminamos solamente la prueba
+ * de red de este arranque.
+ *
+ * El kernel continuara normalmente.
+ * No se ejecuta el receptor antiguo.
+ */
+return 0;
+
+#endif
 
     serial_write(
         "NET: TCP 0.5A TRANSMISION COMPLETA\n"
