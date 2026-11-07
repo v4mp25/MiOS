@@ -41,6 +41,7 @@
 #include "net_udp.h"
 #include "net_dns.h"
 #include "net_tcp.h"
+#include "net_http.h"
 /*
  * 1 = demostracion grafica automatica.
  * 0 = arranque normal de MiOS.
@@ -9808,6 +9809,32 @@ void kernel_main(uint32_t multiboot_magic,
         
 /* Consola de diagnostico independiente de VGA */
 serial_init();
+
+serial_write(
+    "\n=== MiOS HTTP 0.1 ===\n"
+);
+
+if (net_http_selftest() == 0) {
+    serial_write(
+        "NET: HTTP GET HEADER OK\n"
+    );
+
+    serial_write(
+        "NET: HTTP HOST OK\n"
+    );
+
+    serial_write(
+        "NET: HTTP REQUEST FORMAT OK\n"
+    );
+
+    serial_write(
+        "NET: HTTP SELFTEST OK\n"
+    );
+} else {
+    serial_write(
+        "NET: HTTP SELFTEST ERROR\n"
+    );
+}
 
 /* MiOS Network TCP 0.1 */
 
