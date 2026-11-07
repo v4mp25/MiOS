@@ -283,5 +283,147 @@ int net_tcp_selftest(void) {
         ) >= 0)
         return -1;
 
+    /*
+     * TCP 0.4: comprobar paquete ACK.
+     */
+    int ack_size = net_tcp_build_ack(
+        packet,
+        sizeof(packet),
+        src,
+        dst,
+        49154U,
+        8080U,
+        0x12345679U,
+        0x0000FA02U
+    );
+
+    if (ack_size != 40)
+        return -1;
+
+    /* ACK activo, SYN apagado */
+    if (packet[33] != 0x10U)
+        return -1;
+
+    /* Nuestro SEQ */
+    if (packet[24] != 0x12U ||
+        packet[25] != 0x34U ||
+        packet[26] != 0x56U ||
+        packet[27] != 0x79U)
+        return -1;
+
+    /* ACK del servidor */
+    if (packet[28] != 0x00U ||
+        packet[29] != 0x00U ||
+        packet[30] != 0xFAU ||
+        packet[31] != 0x02U)
+        return -1;
+
+    /* Checksum IPv4 */
+    if (tcp_finish_checksum(
+            tcp_sum_bytes(packet, 20U)
+        ) != 0U)
+        return -1;
+
+    /* Checksum TCP */
+    if (tcp_checksum(
+            src,
+            dst,
+            packet + 20,
+            20U
+        ) != 0U)
+        return -1;
+
     return 0;
+}
+
+/*
+ * MiOS Network TCP 0.4
+ *
+ * Construye un paquete IPv4 + TCP ACK.
+ * Sin opciones y sin datos.
+ */
+int net_tcp_build_ack(
+    uint8_t *out,
+    uint32_t capacity,
+    const uint8_t src_ip[4],
+    const uint8_t dst_ip[4],
+    uint16_t src_port,
+    uint16_t dst_port,
+    uint32_t sequence_number,
+    uint32_t acknowledgment_number
+) {
+    if (!out || !src_ip || !dst_ip ||
+        capacity < 40U ||
+        src_port == 0U ||
+        dst_port == 0U)
+        return -1;
+
+    for (uint32_t i = 0; i < 40U; i++)
+        out[i] = 0;
+
+    /* Cabecera IPv4 */
+    uint8_t *ip = out;
+
+    ip[0] = 0x45;
+    ip[1] = 0x00;
+
+    tcp_write16(ip + 2, 40U);
+    tcp_write16(ip + 4, 0x1237U);
+    tcp_write16(ip + 6, 0x4000U);
+
+    ip[8] = 64U;
+    ip[9] = 6U;
+
+    for (uint32_t i = 0; i < 4U; i++) {
+        ip[12U + i] = src_ip[i];
+        ip[16U + i] = dst_ip[i];
+    }
+
+    /* Checksum de IPv4 */
+    tcp_write16(
+        ip + 10,
+        tcp_finish_checksum(
+            tcp_sum_bytes(ip, 20U)
+        )
+    );
+
+    /* Cabecera TCP */
+    uint8_t *tcp = out + 20U;
+
+    tcp_write16(tcp + 0, src_port);
+    tcp_write16(tcp + 2, dst_port);
+
+    /* Nuestro siguiente SEQ */
+    tcp_write32(
+        tcp + 4,
+        sequence_number
+    );
+
+    /* Siguiente SEQ esperado del servidor */
+    tcp_write32(
+        tcp + 8,
+        acknowledgment_number
+    );
+
+    /* Cabecera TCP de 20 bytes */
+    tcp[12] = 0x50;
+
+    /* Solo bandera ACK */
+    tcp[13] = 0x10;
+
+    /* Ventana anunciada */
+    tcp_write16(tcp + 14, 4096U);
+
+    /* Checksum TCP obligatorio */
+    tcp_write16(
+        tcp + 16,
+        tcp_checksum(
+            src_ip,
+            dst_ip,
+            tcp,
+            20U
+        )
+    );
+
+    return 40;
 }

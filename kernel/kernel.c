@@ -8047,6 +8047,140 @@ static int rtl8139_tcp_receive_synack(
     return -1;
 }
 
+/*
+ * MiOS TCP 0.4
+ *
+ * Enviar ACK final del handshake.
+ *
+ * En esta secuencia de laboratorio,
+ * TX2 sigue al TX1 usado por SYN.
+ */
+static int rtl8139_tcp_send_ack(
+    const uint8_t gateway_mac[6],
+    uint32_t server_next_seq
+) {
+    if (!gateway_mac ||
+        rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dst_ip[4] = {
+        10, 0, 2, 2
+    };
+
+    /* Limpiar TX DMA */
+    for (uint32_t i = 0;
+         i < sizeof(rtl_tx_buffer);
+         i++) {
+        rtl_tx_buffer[i] = 0;
+    }
+
+    /* Ethernet: MAC destino y origen */
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = gateway_mac[i];
+
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(
+                io + (uint16_t)i
+            );
+    }
+
+    /* EtherType IPv4 */
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x00;
+
+    /*
+     * SYN consumio un numero
+     * de secuencia.
+     *
+     * SEQ = 0x12345679
+     * ACK = server_next_seq
+     */
+    int ip_size = net_tcp_build_ack(
+        &rtl_tx_buffer[14],
+        sizeof(rtl_tx_buffer) - 14U,
+        src_ip,
+        dst_ip,
+        49154U,
+        8080U,
+        0x12345679U,
+        server_next_seq
+    );
+
+    if (ip_size != 40) {
+        serial_write(
+            "NET: TCP ACK BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    uint32_t frame_size =
+        14U + (uint32_t)ip_size;
+
+    /* Minimo Ethernet sin FCS */
+    if (frame_size < 60U)
+        frame_size = 60U;
+
+    if (frame_size > sizeof(rtl_tx_buffer))
+        return -1;
+
+    __asm__ volatile("" ::: "memory");
+
+    /*
+     * RTL8139 TX2
+     *
+     * TSAD2 = IO + 0x28
+     * TSD2  = IO + 0x18
+     */
+    rtl8139_out32(
+        io + 0x28,
+        (uint32_t)(uintptr_t)rtl_tx_buffer
+    );
+
+    rtl8139_out32(
+        io + 0x18,
+        frame_size
+    );
+
+    for (uint32_t n = 0;
+         n < 5000000U;
+         n++) {
+
+        uint32_t status =
+            rtl8139_in32(io + 0x18);
+
+        if (status & 0x00008000U) {
+            serial_write(
+                "NET: TCP ACK ENVIADO\n"
+            );
+
+            serial_write(
+                "NET: TCP ACK TX OK\n"
+            );
+
+            return 0;
+        }
+
+        if (status & 0x40000000U) {
+            serial_write(
+                "NET: TCP ACK ABORTADO\n"
+            );
+            return -1;
+        }
+    }
+
+    serial_write(
+        "NET: TCP ACK TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -8404,6 +8538,31 @@ serial_write(
      * En la siguiente etapa
      * enviaremos el ACK final.
      */
+
+    /*
+     * MiOS TCP 0.4
+     * Enviar ACK final del handshake.
+     */
+
+    serial_write(
+        "NET: PREPARANDO TCP ACK FINAL\n"
+    );
+
+    if (rtl8139_tcp_send_ack(
+            gateway_mac,
+            tcp_server_next_seq
+        ) != 0) {
+
+        serial_write(
+            "NET: TCP HANDSHAKE ACK FALLO\n"
+        );
+
+        return -1;
+    }
+
+    serial_write(
+        "NET: TCP HANDSHAKE ACK TRANSMITIDO\n"
+    );
 
 return 0;
 
