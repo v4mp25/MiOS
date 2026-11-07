@@ -1,0 +1,287 @@
+
+#include <stdint.h>
+#include "net_tcp.h"
+
+#define TCP_IP_HEADER 20U
+#define TCP_HEADER    20U
+#define TCP_SYN_SIZE  40U
+
+static void tcp_write16(
+    uint8_t *p,
+    uint16_t value
+) {
+    p[0] = (uint8_t)(value >> 8);
+    p[1] = (uint8_t)value;
+}
+
+static void tcp_write32(
+    uint8_t *p,
+    uint32_t value
+) {
+    p[0] = (uint8_t)(value >> 24);
+    p[1] = (uint8_t)(value >> 16);
+    p[2] = (uint8_t)(value >> 8);
+    p[3] = (uint8_t)value;
+}
+
+/* Suma de palabras de 16 bits, formato red */
+static uint32_t tcp_sum_bytes(
+    const uint8_t *data,
+    uint32_t length
+) {
+    uint32_t sum = 0;
+
+    for (uint32_t i = 0;
+         i + 1U < length;
+         i += 2U) {
+
+        sum +=
+            ((uint32_t)data[i] << 8) |
+            data[i + 1U];
+    }
+
+    if (length & 1U) {
+        sum +=
+            (uint32_t)data[length - 1U] << 8;
+    }
+
+    return sum;
+}
+
+static uint16_t tcp_finish_checksum(
+    uint32_t sum
+) {
+    while (sum >> 16) {
+        sum = (sum & 0xFFFFU) +
+              (sum >> 16);
+    }
+
+    return (uint16_t)~sum;
+}
+
+/*
+ * Checksum TCP:
+ * pseudo-cabecera IPv4 + segmento TCP.
+ */
+static uint16_t tcp_checksum(
+    const uint8_t src_ip[4],
+    const uint8_t dst_ip[4],
+    const uint8_t *tcp,
+    uint16_t tcp_length
+) {
+    uint32_t sum = 0;
+
+    sum += tcp_sum_bytes(src_ip, 4U);
+    sum += tcp_sum_bytes(dst_ip, 4U);
+
+    /* Protocolo TCP = 6 */
+    sum += 6U;
+
+    /* Longitud TCP en pseudo-cabecera */
+    sum += tcp_length;
+
+    sum += tcp_sum_bytes(
+        tcp,
+        tcp_length
+    );
+
+    return tcp_finish_checksum(sum);
+}
+
+int net_tcp_build_syn(
+    uint8_t *out,
+    uint32_t capacity,
+    const uint8_t src_ip[4],
+    const uint8_t dst_ip[4],
+    uint16_t src_port,
+    uint16_t dst_port,
+    uint32_t sequence_number
+) {
+    if (!out || !src_ip || !dst_ip ||
+        capacity < TCP_SYN_SIZE ||
+        src_port == 0U ||
+        dst_port == 0U) {
+        return -1;
+    }
+
+    /* Limpiar el paquete */
+    for (uint32_t i = 0;
+         i < TCP_SYN_SIZE;
+         i++) {
+        out[i] = 0;
+    }
+
+    /*
+     * IPv4: 20 bytes
+     */
+    uint8_t *ip = out;
+
+    ip[0] = 0x45;   /* IPv4, IHL=5 */
+    ip[1] = 0x00;
+
+    tcp_write16(ip + 2, TCP_SYN_SIZE);
+    tcp_write16(ip + 4, 0x1236);
+
+    /* Don't Fragment */
+    tcp_write16(ip + 6, 0x4000);
+
+    ip[8] = 64;     /* TTL */
+    ip[9] = 6;      /* TCP */
+
+    for (uint32_t i = 0; i < 4U; i++) {
+        ip[12U + i] = src_ip[i];
+        ip[16U + i] = dst_ip[i];
+    }
+
+    /* Checksum IPv4 */
+    tcp_write16(
+        ip + 10,
+        tcp_finish_checksum(
+            tcp_sum_bytes(ip, TCP_IP_HEADER)
+        )
+    );
+
+    /*
+     * TCP: 20 bytes
+     */
+    uint8_t *tcp = out + TCP_IP_HEADER;
+
+    tcp_write16(tcp + 0, src_port);
+    tcp_write16(tcp + 2, dst_port);
+
+    tcp_write32(
+        tcp + 4,
+        sequence_number
+    );
+
+    /* ACK number = 0 para SYN inicial */
+    tcp_write32(tcp + 8, 0U);
+
+    /* Data offset: 5 palabras (20 bytes) */
+    tcp[12] = 0x50;
+
+    /* Flag SYN */
+    tcp[13] = 0x02;
+
+    /* Receive window */
+    tcp_write16(tcp + 14, 4096U);
+
+    /* Checksum TCP */
+    tcp_write16(
+        tcp + 16,
+        tcp_checksum(
+            src_ip,
+            dst_ip,
+            tcp,
+            TCP_HEADER
+        )
+    );
+
+    /* Urgent pointer = 0 */
+    tcp_write16(tcp + 18, 0U);
+
+    return (int)TCP_SYN_SIZE;
+}
+
+/*
+ * Prueba interna sin hardware.
+ */
+int net_tcp_selftest(void) {
+    uint8_t packet[40];
+
+    const uint8_t src[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dst[4] = {
+        10, 0, 2, 2
+    };
+
+    int length = net_tcp_build_syn(
+        packet,
+        sizeof(packet),
+        src,
+        dst,
+        49154U,
+        8080U,
+        0x12345678U
+    );
+
+    if (length != 40)
+        return -1;
+
+    /* IPv4 + TCP */
+    if (packet[0] != 0x45 ||
+        packet[9] != 6)
+        return -1;
+
+    /* Longitud IP = 40 */
+    if (packet[2] != 0 ||
+        packet[3] != 40)
+        return -1;
+
+    /* Header IPv4 checksum correcto */
+    if (tcp_finish_checksum(
+            tcp_sum_bytes(packet, 20U)
+        ) != 0U)
+        return -1;
+
+    /* Puertos 49154 -> 8080 */
+    if (packet[20] != 0xC0 ||
+        packet[21] != 0x02 ||
+        packet[22] != 0x1F ||
+        packet[23] != 0x90)
+        return -1;
+
+    /* Sequence number */
+    if (packet[24] != 0x12 ||
+        packet[25] != 0x34 ||
+        packet[26] != 0x56 ||
+        packet[27] != 0x78)
+        return -1;
+
+    /* TCP header size y SYN */
+    if (packet[32] != 0x50 ||
+        packet[33] != 0x02)
+        return -1;
+
+    /* Checksum TCP correcto */
+    if (tcp_checksum(
+            src,
+            dst,
+            packet + 20,
+            TCP_HEADER
+        ) != 0U)
+        return -1;
+
+    /*
+     * Comprobar que un cambio de datos
+     * invalida el checksum.
+     */
+    packet[24] ^= 1U;
+
+    if (tcp_checksum(
+            src,
+            dst,
+            packet + 20,
+            TCP_HEADER
+        ) == 0U)
+        return -1;
+
+    /* Restaurar */
+    packet[24] ^= 1U;
+
+    /* Rechazar buffer insuficiente */
+    if (net_tcp_build_syn(
+            packet,
+            10U,
+            src,
+            dst,
+            49154U,
+            8080U,
+            0x12345678U
+        ) >= 0)
+        return -1;
+
+    return 0;
+}

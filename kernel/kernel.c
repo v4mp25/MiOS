@@ -40,6 +40,7 @@
 #include "fb_text.h"
 #include "net_udp.h"
 #include "net_dns.h"
+#include "net_tcp.h"
 /*
  * 1 = demostracion grafica automatica.
  * 0 = arranque normal de MiOS.
@@ -7953,6 +7954,42 @@ void kernel_main(uint32_t multiboot_magic,
         
 /* Consola de diagnostico independiente de VGA */
 serial_init();
+
+/* MiOS Network TCP 0.1 */
+
+serial_write(
+    "\n=== MiOS TCP 0.1 ===\n"
+);
+
+if (net_tcp_selftest() == 0) {
+    serial_write(
+        "NET: TCP IPV4 HEADER OK\n"
+    );
+
+    serial_write(
+        "NET: TCP SYN HEADER OK\n"
+    );
+
+    serial_write(
+        "NET: TCP SEQUENCE NUMBER OK\n"
+    );
+
+    serial_write(
+        "NET: TCP IP CHECKSUM OK\n"
+    );
+
+    serial_write(
+        "NET: TCP CHECKSUM OK\n"
+    );
+
+    serial_write(
+        "NET: TCP SELFTEST OK\n"
+    );
+} else {
+    serial_write(
+        "NET: TCP SELFTEST ERROR\n"
+    );
+}
 
 /* MiOS Network 0.4A.4 - DNS */
 
