@@ -9344,6 +9344,152 @@ static int rtl8139_http_send_ack(
  * - Respuesta maxima de 4096 bytes.
  */
 
+/*
+ * MiOS HTTP 0.6A
+ *
+ * Guardar los primeros 200 bytes de una
+ * descarga HTTP en MIOSFS01.
+ *
+ * Esta funcion no guarda los 3072 bytes
+ * completos: respeta el limite actual
+ * del sistema de archivos.
+ */
+
+static int mios_http_save_first_part(
+    const uint8_t *body,
+    uint32_t body_length
+) {
+    if (!body || body_length < 200U) {
+        serial_write(
+            "NET: HTTP SAVE BODY INSUFICIENTE\n"
+        );
+        return -1;
+    }
+
+    const char *path =
+        "/descargas/http_06a.txt";
+
+    char text[201];
+    char readback[256];
+
+    /* Copiar 200 bytes de texto */
+    for (uint32_t i = 0; i < 200U; i++) {
+        if (body[i] == 0U) {
+            serial_write(
+                "NET: HTTP SAVE TEXTO CONTIENE NUL\n"
+            );
+            return -1;
+        }
+
+        text[i] = (char)body[i];
+    }
+
+    text[200] = '\0';
+
+    /*
+     * Crear carpeta si todavia no existe.
+     * No eliminar una carpeta preexistente.
+     */
+    int result = mios_fs_mkdir(
+        0U,
+        "/descargas"
+    );
+
+    if (result != MIOS_FS_OK &&
+        result != MIOS_FS_EXISTS) {
+
+        serial_write(
+            "NET: HTTP SAVE MKDIR ERROR\n"
+        );
+        return -1;
+    }
+
+    /*
+     * Evitar sobrescribir accidentalmente
+     * una descarga anterior.
+     */
+    result = mios_fs_cat(
+        0U,
+        path,
+        readback,
+        sizeof(readback)
+    );
+
+    if (result == MIOS_FS_NOT_FOUND) {
+        result = mios_fs_write(
+            0U,
+            path,
+            text
+        );
+
+        if (result != MIOS_FS_OK) {
+            serial_write(
+                "NET: HTTP SAVE WRITE ERROR\n"
+            );
+            return -1;
+        }
+
+        serial_write(
+            "NET: HTTP ARCHIVO ESCRITO\n"
+        );
+
+    } else if (result == MIOS_FS_OK) {
+        serial_write(
+            "NET: HTTP ARCHIVO YA EXISTE\n"
+        );
+
+    } else {
+        serial_write(
+            "NET: HTTP SAVE PATH ERROR\n"
+        );
+        return -1;
+    }
+
+    /*
+     * Leer el archivo de MIOSFS01
+     * para verificar el contenido.
+     */
+    result = mios_fs_cat(
+        0U,
+        path,
+        readback,
+        sizeof(readback)
+    );
+
+    if (result != MIOS_FS_OK) {
+        serial_write(
+            "NET: HTTP SAVE READ ERROR\n"
+        );
+        return -1;
+    }
+
+    for (uint32_t i = 0; i < 200U; i++) {
+        if ((uint8_t)readback[i] != body[i]) {
+            serial_write(
+                "NET: HTTP SAVE VERIFY ERROR\n"
+            );
+            return -1;
+        }
+    }
+
+    if (readback[200] != '\0') {
+        serial_write(
+            "NET: HTTP SAVE SIZE ERROR\n"
+        );
+        return -1;
+    }
+
+    serial_write(
+        "NET: HTTP FILE READBACK OK\n"
+    );
+
+    serial_write(
+        "NET: HTTP 0.6A COMPLETADO!\n"
+    );
+
+    return 0;
+}
+
 static int rtl8139_http_receive(
     uint32_t *rx_offset,
     const uint8_t gateway_mac[6],
@@ -9696,6 +9842,31 @@ static int rtl8139_http_receive(
         serial_write(
             "NET: HTTP RX OK\n"
         );
+
+/*
+ * MiOS HTTP 0.6A
+ * Guardar una muestra de la descarga.
+ *
+ * response.body_offset apunta al inicio
+ * del contenido HTTP real.
+ */
+if (response.content_length == 3072U) {
+
+    const uint8_t *body =
+        http_buffer + response.body_offset;
+
+    if (mios_http_save_first_part(
+            body,
+            response.body_length
+        ) != 0) {
+
+        serial_write(
+            "NET: HTTP 0.6A SAVE FALLO\n"
+        );
+
+        return -1;
+    }
+}
 
         return 0;
     }
@@ -10763,8 +10934,12 @@ if (net_udp_selftest() == 0) {
 }
 
 mios_network_detect();
+
+int mios_network_ready = 0;
+
 if (rtl8139_init_basic() == 0) {
-    rtl8139_dma_arp_test();
+    mios_network_ready = 1;
+    serial_write("NET: RTL8139 LISTA\n");
 }
 serial_write("\n");
 serial_write("=== MiOS SERIAL DEBUG ===\n");
@@ -10841,6 +11016,17 @@ if (framebuffer_map_prepare() == 0) {
 as_init();
 
     mios_fs_init();
+    /*
+ * HTTP 0.6A:
+ * Ejecutar red cuando MIOSFS ya esta inicializado.
+ */
+if (mios_network_ready) {
+    serial_write("NET: MIOSFS INICIALIZADO, INICIANDO HTTP\n");
+
+    if (rtl8139_dma_arp_test() != 0) {
+        serial_write("NET: PRUEBA HTTP/RED FALLO\n");
+    }
+}
     memory_init();
     thread_init();
     process_init();
