@@ -9317,15 +9317,42 @@ static int rtl8139_tcp_receive_final_ack(
  * en un unico segmento TCP.
  */
 
-#define MIOS_HTTP_RX_MAX 512U
+#define MIOS_HTTP_RX_MAX 4096U
+
+/*
+ * Declaracion adelantada:
+ * la implementacion ya existe
+ * mas abajo en kernel.c.
+ */
+static int rtl8139_http_send_ack(
+    const uint8_t gateway_mac[6],
+    uint32_t server_next_seq,
+    uint32_t client_next_seq
+);
+
+/*
+ * MiOS HTTP 0.5
+ *
+ * Ensamblador de respuesta HTTP
+ * en varios segmentos TCP consecutivos.
+ *
+ * Limitaciones del laboratorio:
+ * - Una conexion a la vez.
+ * - Sin segmentos fuera de orden.
+ * - Sin retransmision TCP propia.
+ * - Content-Length obligatorio.
+ * - Respuesta maxima de 4096 bytes.
+ */
 
 static int rtl8139_http_receive(
     uint32_t *rx_offset,
+    const uint8_t gateway_mac[6],
     uint32_t expected_server_seq,
     uint32_t expected_client_ack,
     uint32_t *next_server_seq
 ) {
     if (!rx_offset ||
+        !gateway_mac ||
         !next_server_seq ||
         rtl8139_io_base == 0)
         return -1;
@@ -9336,8 +9363,14 @@ static int rtl8139_http_receive(
         MIOS_HTTP_RX_MAX + 1U
     ];
 
+    static char body_preview[81];
+
+    uint32_t http_used = 0U;
+    uint32_t server_seq = expected_server_seq;
+    uint32_t segment_count = 0U;
+
     serial_write(
-        "NET: ESPERANDO HTTP 200 OK...\n"
+        "NET: HTTP ESPERANDO MULTISEGMENTOS...\n"
     );
 
     for (uint32_t n = 0;
@@ -9370,26 +9403,34 @@ static int rtl8139_http_receive(
                 sizeof(rtl_rx_buffer)) {
 
             serial_write(
-                "NET: HTTP RX PACKET ERROR\n"
+                "NET: HTTP 0.5 RX ERROR\n"
             );
             return -1;
         }
 
-        volatile uint8_t *frame = packet + 4U;
-        uint32_t frame_size = length - 4U;
+        volatile uint8_t *frame =
+            packet + 4U;
 
-        int valid = 0;
-        uint32_t received_bytes = 0U;
-        uint32_t received_seq = 0U;
+        uint32_t frame_size =
+            (uint32_t)length - 4U;
+
+        uint32_t data_length = 0U;
+        uint32_t packet_seq = 0U;
+
+        volatile uint8_t *data = 0;
+
+        int valid_tcp = 0;
 
         if (frame_size >= 54U &&
             frame[12] == 0x08U &&
             frame[13] == 0x00U) {
 
-            volatile uint8_t *ip = frame + 14U;
+            volatile uint8_t *ip =
+                frame + 14U;
 
             uint32_t ihl =
-                (uint32_t)(ip[0] & 0x0FU) * 4U;
+                (uint32_t)(ip[0] & 0x0FU)
+                * 4U;
 
             uint32_t ip_total =
                 mios_tcp_read16(ip + 2U);
@@ -9400,84 +9441,132 @@ static int rtl8139_http_receive(
             if ((ip[0] >> 4) == 4U &&
                 ihl >= 20U &&
                 ihl <= 60U &&
-                frame_size >= 14U + ihl + 20U &&
+                frame_size >=
+                    14U + ihl + 20U &&
                 ip_total >= ihl + 20U &&
-                ip_total <= frame_size - 14U &&
+                ip_total <=
+                    frame_size - 14U &&
                 (fragment & 0x3FFFU) == 0U &&
                 ip[9] == 6U &&
 
+                /* Servidor 10.0.2.2 */
                 ip[12] == 10U &&
                 ip[13] == 0U &&
                 ip[14] == 2U &&
                 ip[15] == 2U &&
 
+                /* MiOS 10.0.2.15 */
                 ip[16] == 10U &&
                 ip[17] == 0U &&
                 ip[18] == 2U &&
                 ip[19] == 15U) {
 
-                volatile uint8_t *tcp = ip + ihl;
+                volatile uint8_t *tcp =
+                    ip + ihl;
 
-                uint32_t tcp_len = ip_total - ihl;
+                uint32_t tcp_len =
+                    ip_total - ihl;
 
                 uint32_t header_len =
-                    ((uint32_t)tcp[12] >> 4) * 4U;
+                    ((uint32_t)tcp[12] >> 4)
+                    * 4U;
 
-                if (tcp_len >= 20U) {
+                if (header_len >= 20U &&
+                    header_len <= tcp_len) {
+
                     uint16_t src_port =
                         mios_tcp_read16(tcp);
 
                     uint16_t dst_port =
-                        mios_tcp_read16(tcp + 2U);
-
-                    uint32_t seq =
-                        mios_tcp_read32(tcp + 4U);
+                        mios_tcp_read16(
+                            tcp + 2U
+                        );
 
                     uint32_t ack =
-                        mios_tcp_read32(tcp + 8U);
+                        mios_tcp_read32(
+                            tcp + 8U
+                        );
 
                     uint8_t flags = tcp[13];
 
-                    if (header_len >= 20U &&
-                        header_len <= tcp_len &&
-                        src_port == 8080U &&
+                    if (src_port == 8080U &&
                         dst_port == 49154U &&
-                        seq == expected_server_seq &&
-                        ack == expected_client_ack &&
+                        ack ==
+                            expected_client_ack &&
                         (flags & 0x10U) != 0U &&
                         (flags & 0x07U) == 0U &&
                         mios_tcp_checksum_valid(
                             ip, tcp, tcp_len
                         )) {
 
-                        uint32_t data_length =
+                        packet_seq =
+                            mios_tcp_read32(
+                                tcp + 4U
+                            );
+
+                        data_length =
                             tcp_len - header_len;
 
-                        if (data_length > 0U &&
-                            data_length <= MIOS_HTTP_RX_MAX) {
+                        data =
+                            tcp + header_len;
 
-                            volatile uint8_t *data =
-                                tcp + header_len;
-
-                            for (uint32_t i = 0;
-                                 i < data_length;
-                                 i++) {
-
-                                http_buffer[i] = data[i];
-                            }
-
-                            http_buffer[data_length] = 0;
-
-                            received_bytes = data_length;
-                            received_seq = seq;
-                            valid = 1;
-                        }
+                        valid_tcp = 1;
                     }
                 }
             }
         }
 
-        /* Consumir paquete del RX */
+        /*
+         * Si el segmento lleva datos nuevos
+         * consecutivos, copiarlos antes
+         * de liberar el buffer RX.
+         */
+        int has_data = 0;
+
+        if (valid_tcp && data_length > 0U) {
+
+            if (packet_seq == server_seq) {
+
+                if (data_length >
+                    MIOS_HTTP_RX_MAX - http_used) {
+
+                    serial_write(
+                        "NET: HTTP BUFFER LLENO\n"
+                    );
+                    return -1;
+                }
+
+                for (uint32_t i = 0U;
+                     i < data_length;
+                     i++) {
+
+                    http_buffer[http_used + i] =
+                        data[i];
+                }
+
+                http_used += data_length;
+                server_seq += data_length;
+
+                segment_count++;
+                has_data = 1;
+
+            } else {
+                /*
+                 * Segmento repetido o
+                 * fuera de orden: no copiar.
+                 *
+                 * Se reconoce el ultimo byte
+                 * consecutivo recibido.
+                 */
+                serial_write(
+                    "NET: HTTP TCP SEQ NO ESPERADO\n"
+                );
+            }
+        }
+
+        /*
+         * Liberar el registro del anillo RX.
+         */
         offset =
             (offset + 4U + length + 3U)
             & ~3U;
@@ -9495,93 +9584,114 @@ static int rtl8139_http_receive(
             0x0001U
         );
 
-        if (!valid)
+        if (!valid_tcp)
             continue;
 
-       
-/*
- * MiOS HTTP 0.4
- * Analizar la respuesta sin depender
- * de "Hola desde MiOS".
- */
-net_http_response_t response;
+        /*
+         * Reconocer los bytes TCP recibidos.
+         *
+         * Tambien enviamos ACK acumulativo
+         * ante segmentos repetidos.
+         */
+        if (data_length > 0U) {
 
-int parse_result = net_http_parse_response(
-    http_buffer,
-    received_bytes,
-    &response
-);
+            if (rtl8139_http_send_ack(
+                    gateway_mac,
+                    server_seq,
+                    expected_client_ack
+                ) != 0) {
 
-if (parse_result != 0) {
-    serial_write(
-        "NET: HTTP PARSER ERROR\n"
-    );
-    return -1;
-}
+                serial_write(
+                    "NET: HTTP SEGMENT ACK ERROR\n"
+                );
 
-if (response.status_code != 200U) {
-    serial_write(
-        "NET: HTTP STATUS NO ES 200\n"
-    );
-    return -1;
-}
+                return -1;
+            }
+        }
 
-/*
- * Copiar solo el cuerpo HTTP.
- *
- * Añadir byte NUL para imprimirlo
- * como texto en COM1.
- */
-static char body_text[MIOS_HTTP_RX_MAX + 1U];
+        if (!has_data)
+            continue;
 
-if (response.body_length > MIOS_HTTP_RX_MAX) {
-    serial_write(
-        "NET: HTTP BODY DEMASIADO GRANDE\n"
-    );
-    return -1;
-}
+        /*
+         * Intentar analizar la respuesta
+         * acumulada.
+         *
+         * -2 indica que aun faltan bytes.
+         */
+        net_http_response_t response;
 
-for (uint32_t i = 0U;
-     i < response.body_length;
-     i++) {
-
-    body_text[i] =
-        (char)http_buffer[
-            response.body_offset + i
-        ];
-}
-
-body_text[response.body_length] = '\0';
-
-serial_write(
-    "NET: HTTP STATUS 200 OK\n"
-);
-
-serial_write(
-    "NET: HTTP CONTENT-LENGTH VALIDADO\n"
-);
-
-serial_write(
-    "NET: HTTP BODY RECIBIDO:\n"
-);
-
-serial_write(body_text);
-serial_write("\n");
-
-        *next_server_seq =
-            received_seq + received_bytes;
-
-        serial_write(
-            "NET: HTTP RESPUESTA RECIBIDA!\n"
+        int parsed = net_http_parse_response(
+            http_buffer,
+            http_used,
+            &response
         );
 
-        serial_write(
-            "NET: HTTP STATUS 200 OK\n"
-        );
+        if (parsed == -2)
+            continue;
+
+        if (parsed != 0) {
+            serial_write(
+                "NET: HTTP 0.5 PARSER ERROR\n"
+            );
+            return -1;
+        }
+
+        if (response.status_code != 200U) {
+            serial_write(
+                "NET: HTTP STATUS NO ES 200\n"
+            );
+            return -1;
+        }
+
+        /*
+         * Respuesta HTTP completa.
+         */
+        *next_server_seq = server_seq;
+
+        uint32_t preview_length =
+            response.body_length;
+
+        if (preview_length > 80U)
+            preview_length = 80U;
+
+        for (uint32_t i = 0U;
+             i < preview_length;
+             i++) {
+
+            body_preview[i] =
+                (char)http_buffer[
+                    response.body_offset + i
+                ];
+        }
+
+        body_preview[preview_length] = '\0';
 
         serial_write(
-            "NET: HTTP BODY: Hola desde MiOS\n"
+            "NET: HTTP BODY PREVIEW:\n"
         );
+
+        serial_write(body_preview);
+        serial_write("\n");
+
+        serial_write(
+            "NET: HTTP CONTENT-LENGTH COMPLETO\n"
+        );
+
+        if (response.content_length == 3072U) {
+            serial_write(
+                "NET: HTTP 3072 BYTES OK\n"
+            );
+        }
+
+        if (segment_count > 1U) {
+            serial_write(
+                "NET: HTTP MULTISEGMENTO OK\n"
+            );
+        } else {
+            serial_write(
+                "NET: HTTP RESPUESTA UN SEGMENTO\n"
+            );
+        }
 
         serial_write(
             "NET: HTTP RX OK\n"
@@ -9591,17 +9701,29 @@ serial_write("\n");
     }
 
     serial_write(
-        "NET: HTTP RX TIMEOUT\n"
+        "NET: HTTP 0.5 TIMEOUT\n"
     );
 
     return -1;
 }
+
 
 /*
  * MiOS HTTP 0.3B
  *
  * Reconocer los bytes HTTP recibidos.
  * TX0 sigue a TX3 del GET.
+ */
+
+/*
+ * MiOS HTTP 0.5 - ACK TX ROTATIVO
+ *
+ * Usa los 4 descriptores TX de RTL8139.
+ * Cada descriptor tiene su propio buffer DMA.
+ *
+ * TX0 -> TX1 -> TX2 -> TX3 -> TX0 ...
+ *
+ * Laboratorio: una conexion TCP a la vez.
  */
 static int rtl8139_http_send_ack(
     const uint8_t gateway_mac[6],
@@ -9613,28 +9735,89 @@ static int rtl8139_http_send_ack(
 
     uint16_t io = rtl8139_io_base;
 
-    const uint8_t src_ip[4] = {10, 0, 2, 15};
-    const uint8_t dst_ip[4] = {10, 0, 2, 2};
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
 
-    for (uint32_t i = 0;
-         i < sizeof(rtl_tx_buffer);
-         i++) {
-        rtl_tx_buffer[i] = 0;
+    const uint8_t dst_ip[4] = {
+        10, 0, 2, 2
+    };
+
+    /*
+     * Cuatro buffers separados.
+     * Persisten durante toda la ejecucion.
+     *
+     * En nuestro laboratorio los buffers
+     * DMA utilizan direccion accesible
+     * para el dispositivo, como el TX
+     * original que ya teniamos.
+     */
+    static uint8_t ack_frames[4][64]
+        __attribute__((aligned(16)));
+
+    static uint32_t tx_index = 0U;
+
+    uint32_t slot = tx_index;
+
+    uint16_t tsad_reg =
+        (uint16_t)(io + 0x20U + slot * 4U);
+
+    uint16_t tsd_reg =
+        (uint16_t)(io + 0x10U + slot * 4U);
+
+    uint8_t *frame = ack_frames[slot];
+
+    /*
+     * Asegurar que el descriptor anterior
+     * haya terminado antes de reutilizarlo.
+     *
+     * El primer uso de cada slot no
+     * necesita esperar una TX anterior.
+     */
+    static uint8_t slot_used[4] = {
+        0, 0, 0, 0
+    };
+
+    if (slot_used[slot]) {
+        uint32_t old_status =
+            rtl8139_in32(tsd_reg);
+
+        if ((old_status & 0x00008000U) == 0U) {
+            serial_write(
+                "NET: HTTP TX SLOT OCUPADO\n"
+            );
+
+            serial_write_hex32(old_status);
+            serial_write("\n");
+
+            return -1;
+        }
     }
 
-    for (uint32_t i = 0; i < 6U; i++) {
-        rtl_tx_buffer[i] = gateway_mac[i];
+    for (uint32_t i = 0; i < 64U; i++)
+        frame[i] = 0U;
 
-        rtl_tx_buffer[6U + i] =
+    /* Ethernet destino */
+    for (uint32_t i = 0; i < 6U; i++)
+        frame[i] = gateway_mac[i];
+
+    /* Ethernet origen */
+    for (uint32_t i = 0; i < 6U; i++) {
+        frame[6U + i] =
             rtl8139_in8(io + (uint16_t)i);
     }
 
-    rtl_tx_buffer[12] = 0x08;
-    rtl_tx_buffer[13] = 0x00;
+    /* EtherType IPv4 */
+    frame[12] = 0x08U;
+    frame[13] = 0x00U;
 
-    int size = net_tcp_build_ack(
-        &rtl_tx_buffer[14],
-        sizeof(rtl_tx_buffer) - 14U,
+    /*
+     * Construir IPv4 + TCP ACK.
+     * Sin payload.
+     */
+    int ip_size = net_tcp_build_ack(
+        &frame[14],
+        64U - 14U,
         src_ip,
         dst_ip,
         49154U,
@@ -9643,51 +9826,95 @@ static int rtl8139_http_send_ack(
         server_next_seq
     );
 
-    if (size != 40) {
+    if (ip_size != 40) {
         serial_write(
             "NET: HTTP ACK BUILD ERROR\n"
         );
+
         return -1;
     }
 
+    /*
+     * 14 Ethernet + 40 IPv4/TCP = 54.
+     * Ethernet necesita 60 bytes minimo
+     * sin contar FCS.
+     */
+    uint32_t frame_size = 60U;
+
     __asm__ volatile("" ::: "memory");
 
-    /* TX0 */
+    /*
+     * Configurar descriptor actual.
+     */
     rtl8139_out32(
-        io + 0x20,
-        (uint32_t)(uintptr_t)rtl_tx_buffer
+        tsad_reg,
+        (uint32_t)(uintptr_t)frame
     );
 
     rtl8139_out32(
-        io + 0x10,
-        60U
+        tsd_reg,
+        frame_size
     );
 
+    slot_used[slot] = 1U;
+
+    /*
+     * Esperar finalizacion de esta TX.
+     */
     for (uint32_t n = 0;
          n < 5000000U;
          n++) {
 
         uint32_t status =
-            rtl8139_in32(io + 0x10);
+            rtl8139_in32(tsd_reg);
 
+        /* TOK */
         if (status & 0x00008000U) {
+
             serial_write(
                 "NET: HTTP DATA ACK ENVIADO\n"
             );
+
+            tx_index =
+                (tx_index + 1U) & 3U;
+
             return 0;
         }
 
+        /* TABT */
         if (status & 0x40000000U) {
+
             serial_write(
                 "NET: HTTP ACK ABORTADO\n"
             );
+
+            serial_write_hex32(status);
+            serial_write("\n");
+
             return -1;
         }
     }
 
+    /*
+     * Diagnostico: ver valor TSD
+     * en caso de timeout.
+     */
     serial_write(
-        "NET: HTTP ACK TIMEOUT\n"
+        "NET: HTTP ACK TIMEOUT TX SLOT\n"
     );
+
+    serial_write_hex32(slot);
+    serial_write("\n");
+
+    serial_write(
+        "NET: HTTP ACK TSD STATUS\n"
+    );
+
+    serial_write_hex32(
+        rtl8139_in32(tsd_reg)
+    );
+
+    serial_write("\n");
 
     return -1;
 }
@@ -10133,8 +10360,10 @@ serial_write("\n");
  */
 uint32_t http_server_next_seq = 0U;
 
+
 if (rtl8139_http_receive(
         &rx_offset,
+        gateway_mac,
         tcp_server_next_seq,
         client_next_seq,
         &http_server_next_seq
@@ -10143,23 +10372,15 @@ if (rtl8139_http_receive(
     serial_write(
         "NET: HTTP RX FALLO\n"
     );
+
     return -1;
 }
+
 
 /*
  * Reconocer los datos recibidos.
  */
-if (rtl8139_http_send_ack(
-        gateway_mac,
-        http_server_next_seq,
-        client_next_seq
-    ) != 0) {
 
-    serial_write(
-        "NET: HTTP ACK FALLO\n"
-    );
-    return -1;
-}
 
 serial_write(
     "NET: HTTP 0.3 COMPLETADO!\n"
