@@ -8696,11 +8696,14 @@ static int rtl8139_tcp_ack_data(
  * next_seq: reconoce FIN, que consume
  *           un numero de secuencia.
  */
+
 static int rtl8139_tcp_receive_fin(
     uint32_t *rx_offset,
     uint32_t expected_seq,
+    uint32_t expected_client_ack,
     uint32_t *next_seq
-) {
+)
+ {
     if (!rx_offset || !next_seq ||
         rtl8139_io_base == 0)
         return -1;
@@ -8811,7 +8814,7 @@ static int rtl8139_tcp_receive_fin(
                     src_port == 8080U &&
                     dst_port == 49154U &&
                     seq == expected_seq &&
-                    ack == 0x12345686U &&
+                    ack == expected_client_ack &&
 
                     /* FIN y ACK activos */
                     (flags & 0x11U) == 0x11U &&
@@ -8882,10 +8885,13 @@ static int rtl8139_tcp_receive_fin(
  * TX1 sigue a TX0, usado para
  * reconocer "MIOS TCP OK".
  */
+
 static int rtl8139_tcp_ack_fin(
     const uint8_t gateway_mac[6],
-    uint32_t server_next_seq
-) {
+    uint32_t server_next_seq,
+    uint32_t client_next_seq
+)
+ {
     if (!gateway_mac ||
         rtl8139_io_base == 0)
         return -1;
@@ -8925,7 +8931,7 @@ static int rtl8139_tcp_ack_fin(
         dst_ip,
         49154U,
         8080U,
-        0x12345686U,
+        client_next_seq,
         server_next_seq
     );
 
@@ -8986,10 +8992,13 @@ static int rtl8139_tcp_ack_fin(
  * TX2 sigue a TX1, utilizado
  * para reconocer el FIN del servidor.
  */
+
 static int rtl8139_tcp_send_fin(
     const uint8_t gateway_mac[6],
-    uint32_t server_next_seq
-) {
+    uint32_t server_next_seq,
+    uint32_t client_next_seq
+)
+{
     if (!gateway_mac ||
         rtl8139_io_base == 0)
         return -1;
@@ -9040,7 +9049,7 @@ static int rtl8139_tcp_send_fin(
         dst_ip,
         49154U,
         8080U,
-        0x12345686U,
+       client_next_seq,
         server_next_seq
     );
 
@@ -9120,10 +9129,13 @@ static int rtl8139_tcp_send_fin(
  *
  * ACK esperado: 0x12345687
  */
+
 static int rtl8139_tcp_receive_final_ack(
     uint32_t *rx_offset,
-    uint32_t expected_server_seq
-) {
+    uint32_t expected_server_seq,
+    uint32_t expected_final_ack
+)
+ {
     if (!rx_offset || rtl8139_io_base == 0)
         return -1;
 
@@ -9240,7 +9252,7 @@ static int rtl8139_tcp_receive_final_ack(
                     src_port == 8080U &&
                     dst_port == 49154U &&
                     seq == expected_server_seq &&
-                    ack == 0x12345687U &&
+                   ack == expected_final_ack &&
                     flags == 0x10U &&
                     tcp_len == header_len &&
                     mios_tcp_checksum_valid(
@@ -10177,6 +10189,104 @@ serial_write(
  * El FIN del servidor queda para
  * la proxima etapa.
  */
+
+/*
+ * MiOS HTTP 0.3C
+ * Cierre TCP de la conexion HTTP.
+ */
+
+serial_write(
+    "NET: HTTP ESPERANDO FIN DEL SERVIDOR\n"
+);
+
+uint32_t http_next_seq_after_fin = 0U;
+
+/*
+ * El servidor reconocio la peticion GET.
+ * Ya recibimos y confirmamos sus datos.
+ */
+if (rtl8139_tcp_receive_fin(
+        &rx_offset,
+        http_server_next_seq,
+        client_next_seq,
+        &http_next_seq_after_fin
+    ) != 0) {
+
+    serial_write(
+        "NET: HTTP FIN RX ERROR\n"
+    );
+    return -1;
+}
+
+/*
+ * Reconocer FIN del servidor.
+ */
+if (rtl8139_tcp_ack_fin(
+        gateway_mac,
+        http_next_seq_after_fin,
+        client_next_seq
+    ) != 0) {
+
+    serial_write(
+        "NET: HTTP FIN ACK ERROR\n"
+    );
+    return -1;
+}
+
+serial_write(
+    "NET: HTTP FIN REMOTO RECONOCIDO\n"
+);
+
+/*
+ * Enviar FIN propio.
+ * client_next_seq ya considera los
+ * 58 bytes de la peticion HTTP.
+ */
+if (rtl8139_tcp_send_fin(
+        gateway_mac,
+        http_next_seq_after_fin,
+        client_next_seq
+    ) != 0) {
+
+    serial_write(
+        "NET: HTTP FIN PROPIO ERROR\n"
+    );
+    return -1;
+}
+
+serial_write(
+    "NET: HTTP FIN PROPIO TRANSMITIDO\n"
+);
+
+/*
+ * El FIN consume un numero de secuencia.
+ */
+uint32_t client_seq_after_fin =
+    client_next_seq + 1U;
+
+/*
+ * Esperar el ACK final del servidor.
+ */
+if (rtl8139_tcp_receive_final_ack(
+        &rx_offset,
+        http_next_seq_after_fin,
+        client_seq_after_fin
+    ) != 0) {
+
+    serial_write(
+        "NET: HTTP ACK FINAL ERROR\n"
+    );
+    return -1;
+}
+
+serial_write(
+    "NET: HTTP TCP CIERRE COMPLETO!\n"
+);
+
+serial_write(
+    "NET: HTTP 0.3C COMPLETADO!\n"
+);
+
 return 0;
 
 #endif
@@ -10229,11 +10339,14 @@ return 0;
 
     uint32_t tcp_next_seq_after_fin = 0;
 
-    if (rtl8139_tcp_receive_fin(
-            &rx_offset,
-            tcp_next_seq_after_data,
-            &tcp_next_seq_after_fin
-        ) != 0) {
+    if (
+rtl8139_tcp_receive_fin(
+    &rx_offset,
+    tcp_next_seq_after_data,
+    0x12345686U,
+    &tcp_next_seq_after_fin
+)
+!= 0) {
 
         serial_write(
             "NET: TCP FIN RX FALLO\n"
@@ -10242,10 +10355,13 @@ return 0;
         return -1;
     }
 
-    if (rtl8139_tcp_ack_fin(
-            gateway_mac,
-            tcp_next_seq_after_fin
-        ) != 0) {
+    if (
+rtl8139_tcp_ack_fin(
+    gateway_mac,
+    tcp_next_seq_after_fin,
+    0x12345686U
+)
+ != 0) {
 
         serial_write(
             "NET: TCP FIN ACK ERROR\n"
@@ -10267,10 +10383,13 @@ serial_write(
     "NET: PREPARANDO FIN DE MIOS\n"
 );
 
-if (rtl8139_tcp_send_fin(
-        gateway_mac,
-        tcp_next_seq_after_fin
-    ) != 0) {
+if (
+rtl8139_tcp_send_fin(
+    gateway_mac,
+    tcp_next_seq_after_fin,
+    0x12345686U
+)
+ != 0) {
 
     serial_write(
         "NET: TCP FIN PROPIO FALLO\n"
@@ -10288,10 +10407,13 @@ serial_write(
  * Confirmar que Ubuntu reconocio
  * el FIN enviado por MiOS.
  */
-if (rtl8139_tcp_receive_final_ack(
-        &rx_offset,
-        tcp_next_seq_after_fin
-    ) != 0) {
+if (
+rtl8139_tcp_receive_final_ack(
+    &rx_offset,
+    tcp_next_seq_after_fin,
+    0x12345687U
+)
+!= 0) {
 
     serial_write(
         "NET: TCP CIERRE FINAL FALLO\n"
