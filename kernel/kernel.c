@@ -9077,6 +9077,194 @@ static int rtl8139_tcp_send_fin(
     return -1;
 }
 
+/*
+ * MiOS TCP 0.6B.2
+ *
+ * Validar ACK del FIN enviado por MiOS.
+ *
+ * El SYN inicial fue 0x12345678.
+ * MiOS consumio:
+ *  - 1 numero por SYN
+ *  - 13 numeros por datos
+ *  - 1 numero por FIN
+ *
+ * ACK esperado: 0x12345687
+ */
+static int rtl8139_tcp_receive_final_ack(
+    uint32_t *rx_offset,
+    uint32_t expected_server_seq
+) {
+    if (!rx_offset || rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    serial_write(
+        "NET: ESPERANDO ACK FINAL...\n"
+    );
+
+    for (uint32_t n = 0;
+         n < 100000000U;
+         n++) {
+
+        if (rtl8139_in8(io + 0x37) & 1U)
+            continue;
+
+        uint32_t offset = *rx_offset;
+
+        if (offset >= 8192U)
+            return -1;
+
+        volatile uint8_t *packet =
+            &rtl_rx_buffer[offset];
+
+        uint16_t status =
+            (uint16_t)packet[0] |
+            ((uint16_t)packet[1] << 8);
+
+        uint16_t length =
+            (uint16_t)packet[2] |
+            ((uint16_t)packet[3] << 8);
+
+        if (!(status & 1U) ||
+            length < 4U ||
+            length > 2048U ||
+            offset + 4U + length >
+                sizeof(rtl_rx_buffer)) {
+
+            serial_write(
+                "NET: TCP FINAL RX ERROR\n"
+            );
+            return -1;
+        }
+
+        volatile uint8_t *frame =
+            packet + 4U;
+
+        uint32_t frame_size =
+            (uint32_t)length - 4U;
+
+        int ack_ok = 0;
+
+        if (frame_size >= 54U &&
+            frame[12] == 0x08U &&
+            frame[13] == 0x00U) {
+
+            volatile uint8_t *ip =
+                frame + 14U;
+
+            uint32_t ihl =
+                (uint32_t)(ip[0] & 15U) * 4U;
+
+            uint32_t ip_total =
+                mios_tcp_read16(ip + 2U);
+
+            uint16_t fragment =
+                mios_tcp_read16(ip + 6U);
+
+            if ((ip[0] >> 4) == 4U &&
+                ihl >= 20U &&
+                ihl <= 60U &&
+                frame_size >= 14U + ihl + 20U &&
+                ip_total >= ihl + 20U &&
+                ip_total <= frame_size - 14U &&
+                (fragment & 0x3FFFU) == 0U &&
+                ip[9] == 6U &&
+
+                ip[12] == 10U &&
+                ip[13] == 0U &&
+                ip[14] == 2U &&
+                ip[15] == 2U &&
+
+                ip[16] == 10U &&
+                ip[17] == 0U &&
+                ip[18] == 2U &&
+                ip[19] == 15U) {
+
+                volatile uint8_t *tcp =
+                    ip + ihl;
+
+                uint32_t tcp_len =
+                    ip_total - ihl;
+
+                uint32_t header_len =
+                    ((uint32_t)tcp[12] >> 4)
+                    * 4U;
+
+                uint16_t src_port =
+                    mios_tcp_read16(tcp);
+
+                uint16_t dst_port =
+                    mios_tcp_read16(tcp + 2U);
+
+                uint32_t seq =
+                    mios_tcp_read32(tcp + 4U);
+
+                uint32_t ack =
+                    mios_tcp_read32(tcp + 8U);
+
+                uint8_t flags = tcp[13];
+
+                if (header_len >= 20U &&
+                    header_len <= tcp_len &&
+                    src_port == 8080U &&
+                    dst_port == 49154U &&
+                    seq == expected_server_seq &&
+                    ack == 0x12345687U &&
+                    flags == 0x10U &&
+                    tcp_len == header_len &&
+                    mios_tcp_checksum_valid(
+                        ip, tcp, tcp_len
+                    )) {
+
+                    ack_ok = 1;
+                }
+            }
+        }
+
+        /* Liberar el paquete del RX */
+        offset =
+            (offset + 4U + length + 3U)
+            & ~3U;
+
+        offset &= 8191U;
+
+        *rx_offset = offset;
+
+        rtl8139_out16(
+            io + 0x38,
+            (uint16_t)(offset - 16U)
+        );
+
+        rtl8139_out16(
+            io + 0x3E,
+            0x0001U
+        );
+
+        if (ack_ok) {
+            serial_write(
+                "NET: TCP ACK FINAL RECIBIDO!\n"
+            );
+
+            serial_write(
+                "NET: TCP FIN PROPIO RECONOCIDO\n"
+            );
+
+            serial_write(
+                "NET: TCP CIERRE COMPLETO!\n"
+            );
+
+            return 0;
+        }
+    }
+
+    serial_write(
+        "NET: TCP ACK FINAL TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -9580,6 +9768,27 @@ if (rtl8139_tcp_send_fin(
 
 serial_write(
     "NET: TCP FIN PROPIO TRANSMITIDO\n"
+);
+
+/*
+ * TCP 0.6B.2
+ * Confirmar que Ubuntu reconocio
+ * el FIN enviado por MiOS.
+ */
+if (rtl8139_tcp_receive_final_ack(
+        &rx_offset,
+        tcp_next_seq_after_fin
+    ) != 0) {
+
+    serial_write(
+        "NET: TCP CIERRE FINAL FALLO\n"
+    );
+
+    return -1;
+}
+
+serial_write(
+    "NET: TCP 0.6B COMPLETADO!\n"
 );
 
 return 0;
