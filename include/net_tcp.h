@@ -62,4 +62,23 @@ int net_tcp_build_data(
     uint16_t data_length
 );
 
+/*
+ * MiOS TCP 0.6B
+ *
+ * Construir IPv4 + TCP FIN/ACK.
+ * No contiene datos.
+ *
+ * Devuelve 40 bytes o -1.
+ */
+int net_tcp_build_fin_ack(
+    uint8_t *out,
+    uint32_t capacity,
+    const uint8_t src_ip[4],
+    const uint8_t dst_ip[4],
+    uint16_t src_port,
+    uint16_t dst_port,
+    uint32_t sequence_number,
+    uint32_t acknowledgment_number
+);
+
 #endif

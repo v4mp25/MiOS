@@ -8948,6 +8948,135 @@ static int rtl8139_tcp_ack_fin(
     return -1;
 }
 
+/*
+ * MiOS TCP 0.6B.1
+ *
+ * Enviar FIN+ACK desde MiOS.
+ *
+ * TX2 sigue a TX1, utilizado
+ * para reconocer el FIN del servidor.
+ */
+static int rtl8139_tcp_send_fin(
+    const uint8_t gateway_mac[6],
+    uint32_t server_next_seq
+) {
+    if (!gateway_mac ||
+        rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dst_ip[4] = {
+        10, 0, 2, 2
+    };
+
+    /* Preparar buffer de transmision */
+    for (uint32_t i = 0;
+         i < sizeof(rtl_tx_buffer);
+         i++) {
+        rtl_tx_buffer[i] = 0U;
+    }
+
+    /* Cabecera Ethernet */
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = gateway_mac[i];
+
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(
+                io + (uint16_t)i
+            );
+    }
+
+    /* EtherType IPv4 */
+    rtl_tx_buffer[12] = 0x08U;
+    rtl_tx_buffer[13] = 0x00U;
+
+    /*
+     * SEQ de MiOS:
+     * SYN: 1
+     * Datos: 13
+     *
+     * 0x12345678 + 1 + 13
+     * = 0x12345686
+     */
+    int ip_size = net_tcp_build_fin_ack(
+        &rtl_tx_buffer[14],
+        sizeof(rtl_tx_buffer) - 14U,
+        src_ip,
+        dst_ip,
+        49154U,
+        8080U,
+        0x12345686U,
+        server_next_seq
+    );
+
+    if (ip_size != 40) {
+        serial_write(
+            "NET: TCP FIN BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    /* Ethernet minimo, sin FCS */
+    uint32_t frame_size = 60U;
+
+    __asm__ volatile("" ::: "memory");
+
+    /*
+     * RTL8139 TX2
+     * TSAD2 = IO + 0x28
+     * TSD2  = IO + 0x18
+     */
+    rtl8139_out32(
+        io + 0x28,
+        (uint32_t)(uintptr_t)rtl_tx_buffer
+    );
+
+    rtl8139_out32(
+        io + 0x18,
+        frame_size
+    );
+
+    for (uint32_t n = 0;
+         n < 5000000U;
+         n++) {
+
+        uint32_t status =
+            rtl8139_in32(io + 0x18);
+
+        /* TOK: transmision completada */
+        if (status & 0x00008000U) {
+            serial_write(
+                "NET: TCP FIN ENVIADO\n"
+            );
+
+            serial_write(
+                "NET: TCP FIN TX OK\n"
+            );
+
+            return 0;
+        }
+
+        /* TABT: transmision abortada */
+        if (status & 0x40000000U) {
+            serial_write(
+                "NET: TCP FIN TX ABORTADA\n"
+            );
+            return -1;
+        }
+    }
+
+    serial_write(
+        "NET: TCP FIN TX TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -9427,6 +9556,31 @@ serial_write(
     serial_write(
         "NET: TCP 0.6A COMPLETADO!\n"
     );
+
+/*
+ * MiOS TCP 0.6B.1
+ *
+ * Enviar FIN+ACK propio.
+ */
+serial_write(
+    "NET: PREPARANDO FIN DE MIOS\n"
+);
+
+if (rtl8139_tcp_send_fin(
+        gateway_mac,
+        tcp_next_seq_after_fin
+    ) != 0) {
+
+    serial_write(
+        "NET: TCP FIN PROPIO FALLO\n"
+    );
+
+    return -1;
+}
+
+serial_write(
+    "NET: TCP FIN PROPIO TRANSMITIDO\n"
+);
 
 return 0;
 

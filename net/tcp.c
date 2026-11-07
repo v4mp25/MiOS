@@ -393,6 +393,58 @@ int net_tcp_selftest(void) {
         ) != 0U)
         return -1;
 
+/*
+ * TCP 0.6B: comprobar FIN+ACK.
+ */
+uint8_t fin_packet[40];
+
+int fin_size = net_tcp_build_fin_ack(
+    fin_packet,
+    sizeof(fin_packet),
+    src,
+    dst,
+    49154U,
+    8080U,
+    0x12345686U,
+    0x0000FA03U
+);
+
+if (fin_size != 40)
+    return -1;
+
+/* FIN+ACK */
+if (fin_packet[33] != 0x11U)
+    return -1;
+
+/* SEQ = 0x12345686 */
+if (fin_packet[24] != 0x12U ||
+    fin_packet[25] != 0x34U ||
+    fin_packet[26] != 0x56U ||
+    fin_packet[27] != 0x86U)
+    return -1;
+
+/* ACK = 0x0000FA03 */
+if (fin_packet[28] != 0x00U ||
+    fin_packet[29] != 0x00U ||
+    fin_packet[30] != 0xFAU ||
+    fin_packet[31] != 0x03U)
+    return -1;
+
+/* Checksum IPv4 */
+if (tcp_finish_checksum(
+        tcp_sum_bytes(fin_packet, 20U)
+    ) != 0U)
+    return -1;
+
+/* Checksum TCP */
+if (tcp_checksum(
+        src,
+        dst,
+        fin_packet + 20U,
+        20U
+    ) != 0U)
+    return -1;
+
     return 0;
 }
 
@@ -580,4 +632,59 @@ int net_tcp_build_data(
     );
 
     return (int)total_size;
+}
+
+/*
+ * TCP 0.6B
+ * FIN+ACK sin payload.
+ *
+ * Reutiliza nuestro constructor ACK
+ * y recalcula el checksum TCP.
+ */
+int net_tcp_build_fin_ack(
+    uint8_t *out,
+    uint32_t capacity,
+    const uint8_t src_ip[4],
+    const uint8_t dst_ip[4],
+    uint16_t src_port,
+    uint16_t dst_port,
+    uint32_t sequence_number,
+    uint32_t acknowledgment_number
+) {
+    int size = net_tcp_build_ack(
+        out,
+        capacity,
+        src_ip,
+        dst_ip,
+        src_port,
+        dst_port,
+        sequence_number,
+        acknowledgment_number
+    );
+
+    if (size != 40)
+        return -1;
+
+    uint8_t *tcp = out + 20U;
+
+    /* FIN + ACK */
+    tcp[13] = 0x11U;
+
+    /* Limpiar checksum anterior */
+    tcp[16] = 0U;
+    tcp[17] = 0U;
+
+    uint16_t sum = tcp_checksum(
+        src_ip,
+        dst_ip,
+        tcp,
+        20U
+    );
+
+    tcp_write16(
+        tcp + 16,
+        sum
+    );
+
+    return 40;
 }
