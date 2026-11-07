@@ -17,7 +17,6 @@ server.setsockopt(
 
 server.bind((HOST, PORT))
 server.listen(1)
-
 server.settimeout(120)
 
 print("MIOS TCP SERVER: LISTO", flush=True)
@@ -26,18 +25,44 @@ print("Escuchando en puerto 8080", flush=True)
 try:
     connection, address = server.accept()
 
-    print(
-        "TCP: CONEXION ESTABLECIDA",
-        flush=True
-    )
+    with connection:
+        print(
+            "TCP: CONEXION ESTABLECIDA",
+            flush=True
+        )
+        print("Origen:", address, flush=True)
 
-    print("Origen:", address, flush=True)
+        connection.settimeout(15)
 
-    connection.close()
+        try:
+            data = connection.recv(2048)
+
+            print("TCP RX:", data, flush=True)
+
+            if data == b"HOLA TCP MIOS":
+                print("TCP: DATOS CORRECTOS!", flush=True)
+
+                connection.sendall(b"MIOS TCP OK")
+
+                print(
+                    "TCP: RESPUESTA ENVIADA",
+                    flush=True
+                )
+            else:
+                print(
+                    "TCP: MENSAJE INESPERADO",
+                    flush=True
+                )
+
+        except socket.timeout:
+            print(
+                "TCP: TIMEOUT ESPERANDO DATOS",
+                flush=True
+            )
 
 except socket.timeout:
     print(
-        "TCP: TIMEOUT, SIN CONEXION COMPLETA",
+        "TCP: TIMEOUT SIN CONEXION",
         flush=True
     )
 

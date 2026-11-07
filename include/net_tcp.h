@@ -42,4 +42,24 @@ int net_tcp_build_ack(
     uint32_t acknowledgment_number
 );
 
+/*
+ * MiOS TCP 0.5A
+ * Construir IPv4 + TCP PSH/ACK con datos.
+ *
+ * Devuelve longitud IPv4 total o -1.
+ * No incluye cabecera Ethernet.
+ */
+int net_tcp_build_data(
+    uint8_t *out,
+    uint32_t capacity,
+    const uint8_t src_ip[4],
+    const uint8_t dst_ip[4],
+    uint16_t src_port,
+    uint16_t dst_port,
+    uint32_t sequence_number,
+    uint32_t acknowledgment_number,
+    const uint8_t *data,
+    uint16_t data_length
+);
+
 #endif

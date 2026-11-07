@@ -333,6 +333,66 @@ int net_tcp_selftest(void) {
         ) != 0U)
         return -1;
 
+    /*
+     * TCP 0.5A: comprobar datos PSH/ACK.
+     */
+    const uint8_t tcp_message[] = {
+        'H', 'O', 'L', 'A', ' ',
+        'T', 'C', 'P', ' ',
+        'M', 'I', 'O', 'S'
+    };
+
+    uint8_t data_packet[64];
+
+    int data_size = net_tcp_build_data(
+        data_packet,
+        sizeof(data_packet),
+        src,
+        dst,
+        49154U,
+        8080U,
+        0x12345679U,
+        0x0000FA02U,
+        tcp_message,
+        sizeof(tcp_message)
+    );
+
+    if (data_size != 53)
+        return -1;
+
+    /* IPv4 total = 53 */
+    if (data_packet[2] != 0U ||
+        data_packet[3] != 53U)
+        return -1;
+
+    /* PSH + ACK */
+    if (data_packet[33] != 0x18U)
+        return -1;
+
+    /* Verificar los 13 bytes */
+    for (uint32_t i = 0;
+         i < sizeof(tcp_message);
+         i++) {
+
+        if (data_packet[40U + i] != tcp_message[i])
+            return -1;
+    }
+
+    /* Checksum IPv4 */
+    if (tcp_finish_checksum(
+            tcp_sum_bytes(data_packet, 20U)
+        ) != 0U)
+        return -1;
+
+    /* Checksum TCP incluyendo payload */
+    if (tcp_checksum(
+            src,
+            dst,
+            data_packet + 20,
+            33U
+        ) != 0U)
+        return -1;
+
     return 0;
 }
 
@@ -426,4 +486,98 @@ int net_tcp_build_ack(
     );
 
     return 40;
+}
+
+/*
+ * MiOS TCP 0.5A
+ *
+ * Construir IPv4 + TCP PSH/ACK.
+ * Sin opciones TCP, sin fragmentacion.
+ */
+int net_tcp_build_data(
+    uint8_t *out,
+    uint32_t capacity,
+    const uint8_t src_ip[4],
+    const uint8_t dst_ip[4],
+    uint16_t src_port,
+    uint16_t dst_port,
+    uint32_t sequence_number,
+    uint32_t acknowledgment_number,
+    const uint8_t *data,
+    uint16_t data_length
+) {
+    if (!out || !src_ip || !dst_ip ||
+        !data || data_length == 0U ||
+        data_length > 1460U ||
+        src_port == 0U || dst_port == 0U)
+        return -1;
+
+    uint32_t total_size = 40U + data_length;
+    uint16_t tcp_size = (uint16_t)(20U + data_length);
+
+    if (capacity < total_size)
+        return -1;
+
+    for (uint32_t i = 0; i < total_size; i++)
+        out[i] = 0;
+
+    /* IPv4 */
+    uint8_t *ip = out;
+
+    ip[0] = 0x45;
+    ip[1] = 0;
+
+    tcp_write16(ip + 2, (uint16_t)total_size);
+    tcp_write16(ip + 4, 0x1238U);
+    tcp_write16(ip + 6, 0x4000U);
+
+    ip[8] = 64U;
+    ip[9] = 6U;
+
+    for (uint32_t i = 0; i < 4U; i++) {
+        ip[12U + i] = src_ip[i];
+        ip[16U + i] = dst_ip[i];
+    }
+
+    tcp_write16(
+        ip + 10,
+        tcp_finish_checksum(
+            tcp_sum_bytes(ip, 20U)
+        )
+    );
+
+    /* TCP */
+    uint8_t *tcp = out + 20U;
+
+    tcp_write16(tcp + 0, src_port);
+    tcp_write16(tcp + 2, dst_port);
+
+    tcp_write32(tcp + 4, sequence_number);
+    tcp_write32(tcp + 8, acknowledgment_number);
+
+    /* TCP header = 20 bytes */
+    tcp[12] = 0x50;
+
+    /* PSH + ACK */
+    tcp[13] = 0x18;
+
+    tcp_write16(tcp + 14, 4096U);
+
+    /* Copiar datos despues del header TCP */
+    for (uint32_t i = 0; i < data_length; i++) {
+        tcp[20U + i] = data[i];
+    }
+
+    /* Checksum TCP incluye datos */
+    tcp_write16(
+        tcp + 16,
+        tcp_checksum(
+            src_ip,
+            dst_ip,
+            tcp,
+            tcp_size
+        )
+    );
+
+    return (int)total_size;
 }

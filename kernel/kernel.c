@@ -8181,6 +8181,141 @@ static int rtl8139_tcp_send_ack(
     return -1;
 }
 
+/*
+ * MiOS TCP 0.5A
+ *
+ * Enviar "HOLA TCP MIOS" despues
+ * de completar el handshake TCP.
+ *
+ * TX3 sigue al TX2 del ACK.
+ */
+static int rtl8139_tcp_send_data(
+    const uint8_t gateway_mac[6],
+    uint32_t server_next_seq
+) {
+    if (!gateway_mac || rtl8139_io_base == 0)
+        return -1;
+
+    uint16_t io = rtl8139_io_base;
+
+    const uint8_t src_ip[4] = {
+        10, 0, 2, 15
+    };
+
+    const uint8_t dst_ip[4] = {
+        10, 0, 2, 2
+    };
+
+    const uint8_t message[] = {
+        'H', 'O', 'L', 'A', ' ',
+        'T', 'C', 'P', ' ',
+        'M', 'I', 'O', 'S'
+    };
+
+    /* Limpiar TX DMA */
+    for (uint32_t i = 0;
+         i < sizeof(rtl_tx_buffer);
+         i++) {
+        rtl_tx_buffer[i] = 0;
+    }
+
+    /* MAC destino y MAC origen */
+    for (uint32_t i = 0; i < 6U; i++) {
+        rtl_tx_buffer[i] = gateway_mac[i];
+
+        rtl_tx_buffer[6U + i] =
+            rtl8139_in8(
+                io + (uint16_t)i
+            );
+    }
+
+    rtl_tx_buffer[12] = 0x08;
+    rtl_tx_buffer[13] = 0x00;
+
+    /*
+     * SEQ = SYN inicial + 1
+     * ACK = siguiente SEQ del servidor
+     */
+    int ip_size = net_tcp_build_data(
+        &rtl_tx_buffer[14],
+        sizeof(rtl_tx_buffer) - 14U,
+        src_ip,
+        dst_ip,
+        49154U,
+        8080U,
+        0x12345679U,
+        server_next_seq,
+        message,
+        (uint16_t)sizeof(message)
+    );
+
+    if (ip_size != 53) {
+        serial_write(
+            "NET: TCP DATA BUILD ERROR\n"
+        );
+        return -1;
+    }
+
+    uint32_t frame_size =
+        14U + (uint32_t)ip_size;
+
+    if (frame_size < 60U)
+        frame_size = 60U;
+
+    if (frame_size > sizeof(rtl_tx_buffer))
+        return -1;
+
+    __asm__ volatile("" ::: "memory");
+
+    /*
+     * RTL8139 TX3
+     * TSAD3 = IO + 0x2C
+     * TSD3  = IO + 0x1C
+     */
+    rtl8139_out32(
+        io + 0x2C,
+        (uint32_t)(uintptr_t)rtl_tx_buffer
+    );
+
+    rtl8139_out32(
+        io + 0x1C,
+        frame_size
+    );
+
+    for (uint32_t n = 0;
+         n < 5000000U;
+         n++) {
+
+        uint32_t status =
+            rtl8139_in32(io + 0x1C);
+
+        if (status & 0x00008000U) {
+            serial_write(
+                "NET: TCP DATA TX OK\n"
+            );
+
+            serial_write(
+                "NET: TCP MENSAJE HOLA TCP MIOS\n"
+            );
+
+            return 0;
+        }
+
+        if (status & 0x40000000U) {
+            serial_write(
+                "NET: TCP DATA TX ABORTADA\n"
+            );
+            return -1;
+        }
+    }
+
+    serial_write(
+        "NET: TCP DATA TX TIMEOUT\n"
+    );
+
+    return -1;
+}
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -8562,6 +8697,31 @@ serial_write(
 
     serial_write(
         "NET: TCP HANDSHAKE ACK TRANSMITIDO\n"
+    );
+
+    /*
+     * MiOS TCP 0.5A
+     * Primer envio de datos reales.
+     */
+
+    serial_write(
+        "NET: PREPARANDO TCP DATA\n"
+    );
+
+    if (rtl8139_tcp_send_data(
+            gateway_mac,
+            tcp_server_next_seq
+        ) != 0) {
+
+        serial_write(
+            "NET: TCP DATA ERROR\n"
+        );
+
+        return -1;
+    }
+
+    serial_write(
+        "NET: TCP 0.5A TRANSMISION COMPLETA\n"
     );
 
 return 0;
