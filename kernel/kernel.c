@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "download_store.h"
 #include <stddef.h>
 #include "fs.h"
 #include "interrupts.h"
@@ -5843,6 +5844,7 @@ static void term_command_cat(const char *filename)
 }
 
 
+static volatile int mios_tls4_request = 0; /* 1=CHECK, 2=TCP443, 3=NATIVE */
 static void term_execute(void)
 {
     if (term_len == 0)
@@ -5859,10 +5861,24 @@ static void term_execute(void)
     term_print("HELP CLEAR ECHO MEM VER FILES");
     term_print("LS CAT DOWNLOAD");
         term_print("DOWNLOAD PUBLIC");
+        term_print("DOWNLOAD LAB NOMBRE.BIN");
+        term_print("DOWNLOAD LS");
         term_print("DOWNLOAD HTTP HOST/RUTA");
         term_print("DOWNLOAD HTTPS HOST/RUTA");
 }
-    else if (term_equals(term_input, "VER")) {
+    else if (term_equals(term_input, "TLS CHECK")) {
+    mios_tls4_request = 1;
+    term_print("TLS: PROBANDO REQUISITOS");
+}
+else if (term_equals(term_input, "TLS TCP443")) {
+    mios_tls4_request = 2;
+    term_print("TLS: PROBANDO TCP 443");
+}
+else if (term_equals(term_input, "TLS NATIVE")) {
+    mios_tls4_request = 3;
+    term_print("TLS: HANDSHAKE 4.4 / CERT 4.5");
+}
+else if (term_equals(term_input, "VER")) {
         term_print("MiOS Desktop 0.6");
         term_print("KERNEL X86 32 BITS");
     }
@@ -5878,10 +5894,21 @@ static void term_execute(void)
                           (uint32_t)binfs_count());
     }
     
+else if (term_equals(term_input, "DOWNLOAD LS")) {
+    int total = mios_dlstore_count();
+    if (total < 0) {
+        term_print("DLSTORE: DISCO EXTRA NO DISPONIBLE");
+    } else {
+        term_print_number("DLSTORE ARCHIVOS: ", (uint32_t)total);
+        for (uint32_t i = 0U; i < MIOS_DLSTORE_MAX_FILES; i++) {
+            MiosDlstoreEntry item;
+            if (mios_dlstore_get_entry(i, &item) == 0)
+                term_print(item.name);
+        }
+    }
+}
 else if (h08_is_gui_url_command(term_input)) {
-    if (mios_download_already_run) {
-        term_print("DOWNLOAD: SOLO UNO POR ARRANQUE");
-    } else if (mios_download_pending) {
+    if (mios_download_pending) {
         term_print("DOWNLOAD: YA ESTA PENDIENTE");
     } else if (h08_set_url_from_gui(term_input) != 0) {
         term_print("DOWNLOAD: URL/NOMBRE INVALIDO");
@@ -5894,11 +5921,10 @@ else if (h08_is_gui_url_command(term_input)) {
     }
 }
 else if (term_equals(term_input, "DOWNLOAD PUBLIC")) {
-    if (mios_download_already_run) {
-        term_print("PUBLIC: YA SE EJECUTO DOWNLOAD");
-    } else if (mios_download_pending) {
+    if (mios_download_pending) {
         term_print("PUBLIC: SOLICITUD PENDIENTE");
     } else {
+        h08_set_url_from_gui("DOWNLOAD HTTP EXAMPLE.COM/");
         mios_public08_mode = 1;
         mios_download_pending = 1;
         term_print("PUBLIC: SOLICITUD REGISTRADA");
@@ -5920,6 +5946,7 @@ else if (term_equals(term_input, "DOWNLOAD")) {
 
     } else {
 
+        mios_public08_mode = 0;
         mios_download_pending = 1;
 
         term_print(
@@ -10648,7 +10675,8 @@ static int rtl8139_http_send_ack(
 }
 
 /* HTTP 0.8A-0.8C -- modulo aislado, sin alterar TCP 0.7. */
-#include "net_public_08.inc"
+#include "net_public_09.inc"
+#include "mios_tls4_stage.inc"
 
 static int rtl8139_dma_arp_test(void)
 {
@@ -12056,10 +12084,21 @@ if (redraw) {
  * MiOS HTTP 0.7C
  * Teclado de la Terminal grafica.
  */
+
+/*
+ * MiOS Terminal Grafica
+ *
+ * DOWNLOAD 0.7 / 0.8 / 1.0
+ * TLS 4.1 - 4.5
+ */
 if (device == PS2_INPUT_KEYBOARD &&
     desktop_window == MIOS_APP_TERMINAL)
 {
+    /*
+     * 1. Procesar teclado de la terminal.
+     */
     if (term_handle_key(code)) {
+
         MouseState mouse_now;
         mouse_get_state(&mouse_now);
 
@@ -12075,11 +12114,8 @@ if (device == PS2_INPUT_KEYBOARD &&
     }
 
     /*
-     * Ejecutar DOWNLOAD solicitado
-     * desde la Terminal grafica.
-     *
-     * Estamos en el bucle de eventos,
-     * no dentro de una interrupcion.
+     * 2. Ejecutar DOWNLOAD solicitado
+     * desde la terminal grafica.
      */
     if (mios_download_pending) {
 
@@ -12095,7 +12131,8 @@ if (device == PS2_INPUT_KEYBOARD &&
                 "DOWNLOAD: SIN RTL8139\n"
             );
 
-        } else if (mios_download_already_run) {
+        } else if (mios_download_already_run &&
+                   !mios_public08_mode) {
 
             term_print(
                 "DOWNLOAD: YA EJECUTADO"
@@ -12104,11 +12141,12 @@ if (device == PS2_INPUT_KEYBOARD &&
         } else {
 
             /*
-             * Una descarga por arranque.
-             * Evitar reutilizar la conexion
-             * TCP experimental.
+             * Conservar el control anterior:
+             * una descarga local por arranque.
              */
-            mios_download_already_run = 1;
+            if (!mios_public08_mode) {
+                mios_download_already_run = 1;
+            }
 
             term_print(
                 "DOWNLOAD: INICIANDO HTTP..."
@@ -12119,23 +12157,40 @@ if (device == PS2_INPUT_KEYBOARD &&
             );
 
             /*
-             * Ejecutar ARP, UDP, DNS,
-             * TCP, HTTP y BINFS.
+             * Seleccionar descargador.
              */
-            int download_result = mios_public08_mode
-    ? mios_http08_public_test()
-    : mios_download_run_lab();
+            int download_result =
+                mios_public08_mode
+                    ? mios_http08_public_test()
+                    : mios_download_run_lab();
 
             if (download_result == 0) {
 
                 if (mios_public08_mode) {
-                    term_print("HTTP08: ARCHIVO BINFS OK");
-                    term_print(h08_get_filename());
-                    if (h08_using_bridge())
-                        term_print("HTTPS VIA WSL (NO NATIVO)");
+
+                    term_print(
+                        "DOWNLOADFS: ARCHIVO GUARDADO"
+                    );
+
+                    term_print(
+                        h08_get_filename()
+                    );
+
+                    if (h08_using_bridge()) {
+                        term_print(
+                            "HTTPS VIA WSL (NO NATIVO)"
+                        );
+                    }
+
                 } else {
-                    term_print("DOWNLOAD: 3072 BYTES OK");
-                    term_print("BINFS: http3072.bin OK");
+
+                    term_print(
+                        "DOWNLOAD: 3072 BYTES OK"
+                    );
+
+                    term_print(
+                        "BINFS: http3072.bin OK"
+                    );
                 }
 
                 serial_write(
@@ -12155,8 +12210,8 @@ if (device == PS2_INPUT_KEYBOARD &&
         }
 
         /*
-         * Redibujar para mostrar
-         * el resultado en pantalla.
+         * Redibujar terminal despues
+         * de ejecutar DOWNLOAD.
          */
         MouseState mouse_now;
         mouse_get_state(&mouse_now);
@@ -12172,8 +12227,142 @@ if (device == PS2_INPUT_KEYBOARD &&
         }
     }
 
+    /*
+     * 3. Ejecutar solicitudes TLS.
+     *
+     * Estas solicitudes son registradas
+     * por term_execute().
+     *
+     * Se ejecutan en el bucle de eventos,
+     * NO dentro de una interrupcion.
+     */
+    if (mios_tls4_request != 0) {
+
+        int operation = mios_tls4_request;
+
+        /*
+         * Consumir solicitud para
+         * evitar ejecuciones duplicadas.
+         */
+        mios_tls4_request = 0;
+
+        int tls_result = -1;
+
+        serial_write(
+            "TLS4: SOLICITUD DESDE GUI\n"
+        );
+
+        /*
+         * TLS CHECK
+         */
+        if (operation == 1) {
+
+            serial_write(
+                "TLS4: EJECUTANDO CHECK\n"
+            );
+
+            tls_result = mios_tls4_check();
+
+            if (tls_result == 0) {
+                term_print(
+                    "TLS: PLATAFORMA LAB OK"
+                );
+            } else {
+                term_print(
+                    "TLS: PLATAFORMA NO LISTA"
+                );
+            }
+        }
+
+        /*
+         * TLS TCP443
+         */
+        else if (operation == 2) {
+
+            serial_write(
+                "TLS4: EJECUTANDO TCP443\n"
+            );
+
+            if (!mios_network_ready) {
+
+                serial_write(
+                    "TLS4: RTL8139 NO DISPONIBLE\n"
+                );
+
+            } else {
+
+                tls_result =
+                    mios_tls4_probe_tcp443();
+            }
+
+            if (tls_result == 0) {
+                term_print(
+                    "TLS4.1: TCP443 OK (NO TLS)"
+                );
+            } else {
+                term_print(
+                    "TLS4.1: ERROR TCP443"
+                );
+            }
+        }
+
+        /*
+         * TLS NATIVE
+         *
+         * Todavia no tenemos Mbed TLS
+         * completamente enlazado y
+         * validado dentro de MiOS.
+         */
+        else if (operation == 3) {
+
+            serial_write(
+                "TLS4: TLS NATIVO PENDIENTE\n"
+            );
+
+            term_print(
+                "TLS NATIVO: NO INTEGRADO"
+            );
+        }
+
+        /*
+         * Solicitud TLS desconocida.
+         */
+        else {
+
+            serial_write(
+                "TLS4: OPERACION DESCONOCIDA\n"
+            );
+
+            term_print(
+                "TLS: COMANDO INVALIDO"
+            );
+        }
+
+        /*
+         * Redibujar terminal despues
+         * de ejecutar la prueba TLS.
+         */
+        MouseState mouse_now;
+        mouse_get_state(&mouse_now);
+
+        fb_cursor_hide();
+        term_draw_content();
+
+        if (mouse_now.available) {
+            fb_cursor_show(
+                (int)mouse_now.x,
+                (int)mouse_now.y
+            );
+        }
+    }
+
+    /*
+     * Evento de teclado ya atendido
+     * por la terminal grafica.
+     */
     continue;
 }
+
 
 
 
@@ -12273,6 +12462,36 @@ if (device == PS2_INPUT_KEYBOARD &&
     mostrar_prompt();
 
     while (1) {
+    /* TLS4: service GUI request in main loop, never inside an IRQ. */
+    if (mios_tls4_request != 0) {
+        int operation = mios_tls4_request;
+        mios_tls4_request = 0;
+        int tls_rc = -1;
+        if (operation == 1) {
+            tls_rc = mios_tls4_check();
+            term_print(tls_rc == 0 ? "TLS: PLATAFORMA LAB OK" :
+                                  "TLS: PLATAFORMA NO LISTA");
+        } else if (operation == 2) {
+            if (!mios_network_ready) {
+                serial_write("TLS4.1: RTL8139 NO DISPONIBLE\n");
+            } else {
+                tls_rc = mios_tls4_probe_tcp443();
+            }
+            term_print(tls_rc == 0 ? "TLS4.1: TCP443 OK (NO TLS)" :
+                                  "TLS4.1: ERROR TCP443");
+        } else if (operation == 3) {
+#if defined(MIOS_TLS4_NATIVE_MBEDTLS36) && MIOS_TLS4_NATIVE_MBEDTLS36
+            tls_rc = tls4_native_handshake_strict("example.com");
+            if (tls_rc == 0) tls4_native_cleanup();
+            term_print(tls_rc == 0 ? "TLS4.5: CERTIFICADO OK" :
+                                  "TLS4.5: HANDSHAKE RECHAZADO");
+#else
+            serial_write("TLS4.3-4.5: MBED TLS NO ENLAZADO; NO ES HTTPS NATIVO\n");
+            term_print("TLS NATIVO: AUN NO INTEGRADO");
+#endif
+        }
+    }
+
     /*
      * Actualizar la interfaz aunque
      * el usuario no pulse ninguna tecla.
