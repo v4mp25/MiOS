@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Optional build probe; no kernel.bin is modified. Requires official Mbed TLS 3.6.7 sources.
+set -euo pipefail
+cd "$(dirname "$0")/.."
+if [[ ! -f third_party/mbedtls/include/mbedtls/mios_config.h ]]; then
+  echo 'Falta mios_config.h. Ejecuta: python3 tools/preparar_config_tls.py --apply' >&2; exit 2
+fi
+if [[ ! -f third_party/mbedtls/CMakeLists.txt ]]; then
+  echo 'Faltan fuentes Mbed TLS en third_party/mbedtls/' >&2; exit 2
+fi
+# Isolate this build from the host x86-64 build.
+BUILD_DIR='build/mbedtls-i386'
+mkdir -p "$BUILD_DIR"
+CFLAGS_TLS='-m32 -std=c11 -ffreestanding -fno-builtin -fno-stack-protector -fno-pie -fno-pic -fno-asynchronous-unwind-tables -U_FORTIFY_SOURCE -O2 -DMBEDTLS_CONFIG_FILE="mbedtls/mios_config.h"'
+cmake -S third_party/mbedtls -B "$BUILD_DIR" \
+  -DCMAKE_SYSTEM_NAME=Generic \
+  -DCMAKE_C_COMPILER=gcc \
+  -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
+  -DCMAKE_C_FLAGS="$CFLAGS_TLS" \
+  -DENABLE_PROGRAMS=OFF -DENABLE_TESTING=OFF \
+  -DUSE_SHARED_MBEDTLS_LIBRARY=OFF
+cmake --build "$BUILD_DIR" --parallel 2
+find "$BUILD_DIR" -name 'libmbed*.a' -print
+python3 tools/auditar_simbolos_tls.py "$BUILD_DIR/library"
+echo 'Compilacion de archivos estaticos terminada: AUN NO ESTAN ENLAZADOS CON MIOS'

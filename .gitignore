@@ -11,3 +11,18 @@ iso/boot/kernel.bin
 *.log
 *.tmp
 __pycache__/
+
+# MiOS - archivos generados
+build/
+*.o
+*.obj
+*.a
+*.iso
+*.img
+*.pcap
+*.log
+*.pre_tls43
+*.pre_psa_fix
+*.pre_entropy_fix
+third_party/mbedtls-build-host/
+third_party/mbedtls/
