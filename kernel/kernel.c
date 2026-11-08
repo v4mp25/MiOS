@@ -940,6 +940,21 @@ void syscall_console_putc(char c) {
     imprimir(text);
 }
 static uint8_t recover_catalog_buffer[512];
+
+/*
+ * MiOS HTTP 0.7B
+ *
+ * El shell solicita la descarga.
+ * El bucle principal la ejecuta.
+ */
+static volatile int mios_download_pending = 0;
+
+/*
+ * Una descarga por arranque,
+ * hasta mejorar el estado TCP.
+ */
+static int mios_download_already_run = 0;
+
 static void ejecutar_comando(char *linea) {
     char *args = linea;
     while (*args && *args != ' ') args++;
@@ -950,8 +965,42 @@ static void ejecutar_comando(char *linea) {
     int result;
 
   
-if (iguales(linea, "")) return;
+
+if (iguales(linea, "")) {
+    return;
+}
+
+else if (iguales(linea, "download")) {
+
+    if (*args != '\0') {
+        imprimir(
+            "Uso: download\n"
+        );
+
+    } else if (mios_download_already_run) {
+
+        imprimir(
+            "DOWNLOAD: Ya se ejecuto en este arranque.\n"
+        );
+
+    } else if (mios_download_pending) {
+
+        imprimir(
+            "DOWNLOAD: Solicitud pendiente.\n"
+        );
+
+    } else {
+
+        mios_download_pending = 1;
+
+        imprimir(
+            "DOWNLOAD: Solicitud registrada.\n"
+        );
+    }
+}
+
 else if (iguales(linea, "help")) {
+
     imprimir("Comandos de MiOS:\n");
     imprimir("help, clear, about, version, echo TEXTO\n");
     imprimir("pwd, cd RUTA, ls [RUTA], tree [RUTA]\n");
@@ -1035,6 +1084,7 @@ else if (iguales(linea, "help")) {
     imprimir("fs2bitmaptest\n");
     imprimir("fs2test\n");
     imprimir("fs2diskcheck\n");
+    imprimir("download - Descargar archivo HTTP de laboratorio\n");
 imprimir("fs2block0\n");
 imprimir("fs2reserve0\n");
 imprimir("fs2free0\n");
@@ -5797,9 +5847,10 @@ static void term_execute(void)
 
     term_print(term_input);
 
-    if (term_equals(term_input, "HELP")) {
-        term_print("HELP CLEAR ECHO MEM VER FILES");
-    }
+   if (term_equals(term_input, "HELP")) {
+    term_print("HELP CLEAR ECHO MEM VER FILES");
+    term_print("LS CAT DOWNLOAD");
+}
     else if (term_equals(term_input, "VER")) {
         term_print("MiOS Desktop 0.6");
         term_print("KERNEL X86 32 BITS");
@@ -5815,6 +5866,31 @@ static void term_execute(void)
         term_print_number("BINFS ENTRIES: ",
                           (uint32_t)binfs_count());
     }
+    
+else if (term_equals(term_input, "DOWNLOAD")) {
+
+    if (mios_download_already_run) {
+
+        term_print(
+            "DOWNLOAD: YA EJECUTADO"
+        );
+
+    } else if (mios_download_pending) {
+
+        term_print(
+            "DOWNLOAD: PENDIENTE"
+        );
+
+    } else {
+
+        mios_download_pending = 1;
+
+        term_print(
+            "DOWNLOAD: SOLICITUD REGISTRADA"
+        );
+    }
+}
+
     
 else if (term_equals(term_input, "LS")) {
     term_command_ls();
@@ -11593,21 +11669,25 @@ if (binfs_slots < 0) {
 serial_write(
     "NET: HTTP 0.7A MODO DESCARGA\n"
 );
+
+/*
+ * MiOS HTTP 0.7B
+ *
+ * La tarjeta RTL8139 ya se inicializo.
+ * La descarga NO se ejecuta al arrancar.
+ *
+ * Esperaremos el comando "download".
+ */
 if (mios_network_ready) {
-
-    if (mios_download_run_lab() != 0) {
-
-        serial_write(
-            "NET: HTTP 0.7A FALLO\n"
-        );
-    }
-
-} else {
-
     serial_write(
-        "NET: RTL8139 NO DISPONIBLE\n"
+        "NET: DOWNLOAD LISTO PARA COMANDO\n"
+    );
+} else {
+    serial_write(
+        "NET: DOWNLOAD SIN TARJETA DE RED\n"
     );
 }
+
 
 
     memory_init();
@@ -11931,7 +12011,11 @@ if (redraw) {
     continue;
 }
 
-/* Teclado de la Terminal MiOS */
+
+/*
+ * MiOS HTTP 0.7C
+ * Teclado de la Terminal grafica.
+ */
 if (device == PS2_INPUT_KEYBOARD &&
     desktop_window == MIOS_APP_TERMINAL)
 {
@@ -11950,8 +12034,104 @@ if (device == PS2_INPUT_KEYBOARD &&
         }
     }
 
+    /*
+     * Ejecutar DOWNLOAD solicitado
+     * desde la Terminal grafica.
+     *
+     * Estamos en el bucle de eventos,
+     * no dentro de una interrupcion.
+     */
+    if (mios_download_pending) {
+
+        mios_download_pending = 0;
+
+        if (!mios_network_ready) {
+
+            term_print(
+                "DOWNLOAD: SIN TARJETA DE RED"
+            );
+
+            serial_write(
+                "DOWNLOAD: SIN RTL8139\n"
+            );
+
+        } else if (mios_download_already_run) {
+
+            term_print(
+                "DOWNLOAD: YA EJECUTADO"
+            );
+
+        } else {
+
+            /*
+             * Una descarga por arranque.
+             * Evitar reutilizar la conexion
+             * TCP experimental.
+             */
+            mios_download_already_run = 1;
+
+            term_print(
+                "DOWNLOAD: INICIANDO HTTP..."
+            );
+
+            serial_write(
+                "DOWNLOAD: INICIANDO DESDE GUI\n"
+            );
+
+            /*
+             * Ejecutar ARP, UDP, DNS,
+             * TCP, HTTP y BINFS.
+             */
+            int download_result =
+                mios_download_run_lab();
+
+            if (download_result == 0) {
+
+                term_print(
+                    "DOWNLOAD: 3072 BYTES OK"
+                );
+
+                term_print(
+                    "BINFS: http3072.bin OK"
+                );
+
+                serial_write(
+                    "DOWNLOAD: GUI OK\n"
+                );
+
+            } else {
+
+                term_print(
+                    "DOWNLOAD: ERROR"
+                );
+
+                serial_write(
+                    "DOWNLOAD: GUI ERROR\n"
+                );
+            }
+        }
+
+        /*
+         * Redibujar para mostrar
+         * el resultado en pantalla.
+         */
+        MouseState mouse_now;
+        mouse_get_state(&mouse_now);
+
+        fb_cursor_hide();
+        term_draw_content();
+
+        if (mouse_now.available) {
+            fb_cursor_show(
+                (int)mouse_now.x,
+                (int)mouse_now.y
+            );
+        }
+    }
+
     continue;
 }
+
 
 
 
@@ -12130,16 +12310,67 @@ if (gui_active()) {
         if (codigo == 0x3A) { caps = !caps; continue; }
         if (codigo & 0x80) continue;
 
-        if (codigo == 0x1C) {
-            entrada[longitud] = '\0';
-            poner_caracter('\n');
-            ejecutar_comando(entrada);
-longitud = 0;
+      
+if (codigo == 0x1C) {
 
-if (!gui_active()) {
-    mostrar_prompt();
+    entrada[longitud] = '\0';
+    poner_caracter('\n');
+
+    /*
+     * Interpretar el comando.
+     */
+    ejecutar_comando(entrada);
+
+    /*
+     * HTTP 0.7B:
+     * ejecutar una solicitud pendiente
+     * desde el bucle del kernel.
+     */
+    if (mios_download_pending) {
+
+        mios_download_pending = 0;
+
+        if (!mios_network_ready) {
+
+            imprimir(
+                "DOWNLOAD: Tarjeta de red no disponible.\n"
+            );
+
+        } else if (!mios_download_already_run) {
+
+            /*
+             * Marcar antes de ejecutar.
+             * No repetiremos la conexion TCP
+             * dentro de este arranque.
+             */
+            mios_download_already_run = 1;
+
+            imprimir(
+                "DOWNLOAD: Iniciando HTTP...\n"
+            );
+
+            if (mios_download_run_lab() == 0) {
+
+                imprimir(
+                    "DOWNLOAD: OK\n"
+                );
+
+            } else {
+
+                imprimir(
+                    "DOWNLOAD: ERROR\n"
+                );
+            }
+        }
+    }
+
+    longitud = 0;
+
+    if (!gui_active()) {
+        mostrar_prompt();
+    }
 }
-        } else if (codigo == 0x0E) {
+else if (codigo == 0x0E) {
             if (longitud > 0) {
                 longitud--;
                 poner_caracter('\b');
