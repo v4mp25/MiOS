@@ -947,6 +947,9 @@ static uint8_t recover_catalog_buffer[512];
  * El shell solicita la descarga.
  * El bucle principal la ejecuta.
  */
+/* HTTP 0.8A-C: primera prueba HTTP publica desde el escritorio. */
+static int mios_http08_public_test(void);
+static int mios_public08_mode = 0;
 static volatile int mios_download_pending = 0;
 
 /*
@@ -5850,6 +5853,7 @@ static void term_execute(void)
    if (term_equals(term_input, "HELP")) {
     term_print("HELP CLEAR ECHO MEM VER FILES");
     term_print("LS CAT DOWNLOAD");
+        term_print("DOWNLOAD PUBLIC");
 }
     else if (term_equals(term_input, "VER")) {
         term_print("MiOS Desktop 0.6");
@@ -5867,6 +5871,17 @@ static void term_execute(void)
                           (uint32_t)binfs_count());
     }
     
+else if (term_equals(term_input, "DOWNLOAD PUBLIC")) {
+    if (mios_download_already_run) {
+        term_print("PUBLIC: YA SE EJECUTO DOWNLOAD");
+    } else if (mios_download_pending) {
+        term_print("PUBLIC: SOLICITUD PENDIENTE");
+    } else {
+        mios_public08_mode = 1;
+        mios_download_pending = 1;
+        term_print("PUBLIC: SOLICITUD REGISTRADA");
+    }
+}
 else if (term_equals(term_input, "DOWNLOAD")) {
 
     if (mios_download_already_run) {
@@ -10610,6 +10625,9 @@ static int rtl8139_http_send_ack(
     return -1;
 }
 
+/* HTTP 0.8A-0.8C -- modulo aislado, sin alterar TCP 0.7. */
+#include "net_public_08.inc"
+
 static int rtl8139_dma_arp_test(void)
 {
     if (rtl8139_io_base == 0)
@@ -12082,18 +12100,19 @@ if (device == PS2_INPUT_KEYBOARD &&
              * Ejecutar ARP, UDP, DNS,
              * TCP, HTTP y BINFS.
              */
-            int download_result =
-                mios_download_run_lab();
+            int download_result = mios_public08_mode
+    ? mios_http08_public_test()
+    : mios_download_run_lab();
 
             if (download_result == 0) {
 
-                term_print(
-                    "DOWNLOAD: 3072 BYTES OK"
-                );
-
-                term_print(
-                    "BINFS: http3072.bin OK"
-                );
+                if (mios_public08_mode) {
+                    term_print("HTTP PUBLICO: RESPUESTA RECIBIDA");
+                    term_print("VER DETALLES EN COM1");
+                } else {
+                    term_print("DOWNLOAD: 3072 BYTES OK");
+                    term_print("BINFS: http3072.bin OK");
+                }
 
                 serial_write(
                     "DOWNLOAD: GUI OK\n"
