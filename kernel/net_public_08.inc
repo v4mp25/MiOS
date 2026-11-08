@@ -1,25 +1,32 @@
 /*
- * MiOS HTTP 0.8A/B/C -- public HTTP, controlled laboratory implementation.
- * Include this file from kernel/kernel.c immediately before
- * static int rtl8139_dma_arp_test(void).
+ * MiOS HTTP 0.8A-E -- public HTTP, BINFS downloads, variable URLs.
+ * Included by kernel/kernel.c immediately before rtl8139_dma_arp_test.
+ * Also supports an OPTIONAL host-verified HTTPS bridge on 10.0.2.2:8081.
+ * This bridge is NOT native TLS in MiOS; never claim otherwise.
  *
- * Depends on RTL8139 I/O helpers and buffers already defined in kernel.c,
- * plus net_dns_build_query() and net_udp_build_ipv4().
- *
- * One request per boot, one in-order TCP stream. No TLS, no DHCP,
- * no IP fragmentation, no TCP retransmission timer. HTTP result is
- * inspected but NOT saved to disk in this stage.
+ * One request per boot; in-order TCP + duplicate trimming. No native TLS,
+ * DHCP, IP fragmentation, or retransmission timer. Maximum file 8192 B.
  */
 
 #define H08_RX_MAX_FRAME 1600U
 #define H08_TX_MAX_FRAME 1600U
-#define H08_CAPTURE_MAX  1536U
+#define H08_CAPTURE_MAX  12288U
 #define H08_POLL_LIMIT  100000000U
 
 static const uint8_t h08_my_ip[4] = {10, 0, 2, 15};
 static const uint8_t h08_gateway_ip[4] = {10, 0, 2, 2};
 static const uint8_t h08_dns_ip[4] = {10, 0, 2, 3};
-static const char h08_host[] = "example.com";
+/* Runtime HTTP URL: plain HTTP is native; HTTPS uses optional WSL bridge. */
+static char h08_host[128] = "example.com";
+static char h08_path[256] = "/";
+static char h08_url[392] = "http://example.com/";
+static uint16_t h08_target_port = 80U;
+static int h08_bridge_mode = 0;
+static int h08_url_configured = 0;
+static uint8_t h08_body[BINFS_MAX_FILE_SIZE];
+static uint8_t h08_disk_verify[BINFS_MAX_FILE_SIZE];
+static uint32_t h08_body_size;
+static char h08_filename[32];
 
 static uint8_t h08_tx_frames[4][H08_TX_MAX_FRAME]
     __attribute__((aligned(4096)));
@@ -334,7 +341,7 @@ static int h08_dns_get_a(uint8_t out_ip[4])
         dnsquery, (uint16_t)dnslen);
     if (iplen <= 0) return -1;
     if (h08_tx_submit(14U + (uint32_t)iplen) != 0) return -1;
-    serial_write("HTTP08B: DNS QUERY example.com ENVIADA\n");
+    serial_write("HTTP08B: DNS QUERY "); serial_write(h08_host); serial_write(" ENVIADA\n");
 
     for (uint32_t tries = 0; tries < 48U; tries++) {
         int len = h08_rx_poll();
@@ -426,7 +433,7 @@ static int h08_tcp_send(uint8_t flags, uint32_t seq, uint32_t ack,
     uint16_t tcplen = (uint16_t)(20U + payload_size);
     h08_build_ipv4(ip, (uint16_t)(20U + tcplen), h08_target_ip, 6U);
     h08_put16(tcp, h08_local_port);
-    h08_put16(tcp + 2, 80U);
+    h08_put16(tcp + 2, h08_target_port);
     h08_put32(tcp + 4, seq);
     h08_put32(tcp + 8, ack);
     tcp[12] = 0x50U;
@@ -458,7 +465,7 @@ static int h08_tcp_parse(int length, h08_tcp_info *t)
     uint32_t tcplen = iptotal - ihl;
     uint32_t thl = (uint32_t)(tcp[12] >> 4) * 4U;
     if (thl < 20U || thl > tcplen ||
-        h08_get16(tcp) != 80U ||
+        h08_get16(tcp) != h08_target_port ||
         h08_get16(tcp + 2) != h08_local_port ||
         h08_transport_sum(ip + 12, ip + 16, 6U,
                           tcp, (uint16_t)tcplen) != 0U)
@@ -529,51 +536,443 @@ static void h08_print_status(const uint8_t *p, uint32_t n)
     serial_write("\n");
 }
 
+/* ================================================================
+ * MiOS HTTP 0.8D/0.8E: file body + runtime URL selection.
+ * HTTPS demo uses an explicit, certificate-validating WSL relay.
+ * IMPORTANT: THIS DOES NOT IMPLEMENT TLS IN MiOS.
+ * ================================================================ */
+
+static uint8_t h08_tolower(uint8_t c)
+{
+    return (c >= 'A' && c <= 'Z') ? (uint8_t)(c + ('a' - 'A')) : c;
+}
+
+static int h08_ci_begins(const char *str, const char *prefix)
+{
+    while (*prefix) {
+        if (!*str || h08_tolower((uint8_t)*str) !=
+                     h08_tolower((uint8_t)*prefix)) return 0;
+        str++; prefix++;
+    }
+    return 1;
+}
+
+static int h08_ci_name(const uint8_t *p, uint32_t n, const char *lit)
+{
+    uint32_t i = 0U;
+    while (lit[i]) {
+        if (i >= n || h08_tolower(p[i]) != h08_tolower((uint8_t)lit[i]))
+            return 0;
+        i++;
+    }
+    return i == n;
+}
+
+static int h08_valid_filename(const char *s)
+{
+    uint32_t n = 0U;
+    while (s[n] && n < 32U) {
+        uint8_t c = (uint8_t)s[n];
+        if (!((c >= 'a' && c <= 'z') ||
+              (c >= 'A' && c <= 'Z') ||
+              (c >= '0' && c <= '9') ||
+              c == '_' || c == '-' || c == '.')) return 0;
+        n++;
+    }
+    return n > 0U && n < 32U && s[n] == 0 &&
+           s[0] != '.';
+}
+
+static uint32_t h08_hash_name(const char *s)
+{
+    uint32_t hash = 2166136261U;
+    while (*s) {
+        hash ^= (uint8_t)*s++;
+        hash *= 16777619U;
+    }
+    return hash;
+}
+
+static void h08_make_filename(const char *url)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    uint32_t hash = h08_hash_name(url);
+    const char *start = "WEB_";
+    for (uint32_t i = 0U; i < 4U; i++) h08_filename[i] = start[i];
+    for (uint32_t i = 0U; i < 8U; i++)
+        h08_filename[4U + i] = hex[(hash >> (28U - 4U * i)) & 15U];
+    h08_filename[12] = '.';
+    h08_filename[13] = 'B';
+    h08_filename[14] = 'I';
+    h08_filename[15] = 'N';
+    h08_filename[16] = 0;
+}
+
+/* Called in the GUI only to store a small request; no network I/O. */
+static int h08_set_url_from_gui(const char *command)
+{
+    if (!h08_ci_begins(command, "DOWNLOAD ")) return -1;
+    const char *url = command + 9;
+    int bridge = 0;
+    uint32_t scheme_length = 0U;
+    if (h08_ci_begins(url, "HTTP://")) {
+        scheme_length = 7U;
+    } else if (h08_ci_begins(url, "HTTPS://")) {
+        scheme_length = 8U;
+        bridge = 1;
+    } else if (h08_ci_begins(url, "HTTP ")) {
+        /* MiOS GUI keyboard lacks ':'; allow scheme followed by space. */
+        scheme_length = 5U;
+    } else if (h08_ci_begins(url, "HTTPS ")) {
+        scheme_length = 6U;
+        bridge = 1;
+    } else return -1;
+
+    const char *p = url + scheme_length;
+    char new_host[sizeof(h08_host)];
+    char new_path[sizeof(h08_path)];
+    char new_url[sizeof(h08_url)];
+    char new_filename[sizeof(h08_filename)];
+    uint32_t hn = 0U, pn = 0U, fn = 0U;
+
+    while (*p && *p != '/' && *p != '?' && *p != ' ') {
+        uint8_t c = h08_tolower((uint8_t)*p++);
+        if (!((c >= 'a' && c <= 'z') ||
+              (c >= '0' && c <= '9') || c == '.' || c == '-')) return -1;
+        if (hn >= sizeof(new_host) - 1U) return -1;
+        new_host[hn++] = (char)c;
+    }
+    if (hn < 3U || new_host[0] == '.' || new_host[hn - 1U] == '.' ||
+        new_host[0] == '-' || new_host[hn - 1U] == '-') return -1;
+    int has_dot = 0;
+    for (uint32_t i = 0U; i < hn; i++)
+        if (new_host[i] == '.') has_dot = 1;
+    if (!has_dot) return -1;
+    new_host[hn] = 0;
+
+    if (*p == '/') {
+        while (*p && *p != ' ') {
+            uint8_t c = (uint8_t)*p++;
+            if (c <= 32U || c >= 127U || c == '#' || c == '\\')
+                return -1;
+            if (pn >= sizeof(new_path) - 1U) return -1;
+            new_path[pn++] = (char)c;
+        }
+    } else if (*p == '?') {
+        new_path[pn++] = '/';
+        while (*p && *p != ' ') {
+            uint8_t c = (uint8_t)*p++;
+            if (c <= 32U || c >= 127U || c == '#' || c == '\\')
+                return -1;
+            if (pn >= sizeof(new_path) - 1U) return -1;
+            new_path[pn++] = (char)c;
+        }
+    } else {
+        new_path[pn++] = '/';
+    }
+    new_path[pn] = 0;
+
+    while (*p == ' ') p++;
+    if (*p) {
+        if (!h08_ci_begins(p, "AS ")) return -1;
+        p += 3;
+        while (*p && *p != ' ') {
+            if (fn >= sizeof(new_filename) - 1U) return -1;
+            new_filename[fn++] = *p++;
+        }
+        new_filename[fn] = 0;
+        while (*p == ' ') p++;
+        if (*p || !h08_valid_filename(new_filename)) return -1;
+    }
+
+    const char *scheme = bridge ? "https://" : "http://";
+    uint32_t u = 0U;
+    for (uint32_t i = 0U; scheme[i]; i++) {
+        if (u >= sizeof(new_url) - 1U) return -1;
+        new_url[u++] = scheme[i];
+    }
+    for (uint32_t i = 0U; i < hn; i++) {
+        if (u >= sizeof(new_url) - 1U) return -1;
+        new_url[u++] = new_host[i];
+    }
+    for (uint32_t i = 0U; i < pn; i++) {
+        if (u >= sizeof(new_url) - 1U) return -1;
+        new_url[u++] = new_path[i];
+    }
+    new_url[u] = 0;
+
+    for (uint32_t i = 0U; i <= hn; i++) h08_host[i] = new_host[i];
+    for (uint32_t i = 0U; i <= pn; i++) h08_path[i] = new_path[i];
+    for (uint32_t i = 0U; i <= u; i++) h08_url[i] = new_url[i];
+    h08_bridge_mode = bridge;
+    h08_target_port = bridge ? 8081U : 80U;
+    h08_make_filename(h08_url);
+    if (fn) {
+        for (uint32_t i = 0U; i <= fn; i++)
+            h08_filename[i] = new_filename[i];
+    }
+    h08_url_configured = 1;
+    return 0;
+}
+
+static int h08_is_gui_url_command(const char *line)
+{
+    return h08_ci_begins(line, "DOWNLOAD HTTP://") ||
+           h08_ci_begins(line, "DOWNLOAD HTTPS://") ||
+           h08_ci_begins(line, "DOWNLOAD HTTP ") ||
+           h08_ci_begins(line, "DOWNLOAD HTTPS ");
+}
+
+/* Accessors for the earlier GUI interpreter in kernel.c. */
+static const char *h08_get_filename(void) { return h08_filename; }
+static int h08_using_bridge(void) { return h08_bridge_mode; }
+
+static int h08_request_append(uint8_t *buffer, uint32_t cap,
+                              uint32_t *pos, const char *text)
+{
+    while (*text) {
+        if (*pos >= cap) return -1;
+        buffer[(*pos)++] = (uint8_t)*text++;
+    }
+    return 0;
+}
+
+static int h08_build_request(uint8_t *out, uint32_t capacity)
+{
+    uint32_t pos = 0U;
+#define H08_APPEND(x) do { if (h08_request_append(out, capacity, &pos, (x)) != 0) return -1; } while (0)
+    if (h08_bridge_mode) {
+        H08_APPEND("GET /fetch HTTP/1.0\r\n");
+        H08_APPEND("Host: 10.0.2.2:8081\r\n");
+        H08_APPEND("X-MiOS-URL: ");
+        H08_APPEND(h08_url);
+        H08_APPEND("\r\n");
+    } else {
+        H08_APPEND("GET ");
+        H08_APPEND(h08_path);
+        H08_APPEND(" HTTP/1.0\r\nHost: ");
+        H08_APPEND(h08_host);
+        H08_APPEND("\r\n");
+    }
+    H08_APPEND("User-Agent: MiOS-HTTP08\r\n");
+    H08_APPEND("Accept-Encoding: identity\r\n");
+    H08_APPEND("Connection: close\r\n\r\n");
+#undef H08_APPEND
+    return (int)pos;
+}
+
+static int h08_header_end(const uint8_t *p, uint32_t n,
+                          uint32_t *out)
+{
+    for (uint32_t i = 0U; i + 3U < n; i++) {
+        if (p[i] == '\r' && p[i + 1U] == '\n' &&
+            p[i + 2U] == '\r' && p[i + 3U] == '\n') {
+            *out = i + 4U;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+static int h08_hex_digit(uint8_t c)
+{
+    if (c >= '0' && c <= '9') return (int)(c - '0');
+    c = h08_tolower(c);
+    if (c >= 'a' && c <= 'f') return (int)(c - 'a') + 10;
+    return -1;
+}
+
+/* Decode RFC-style HTTP/1.1 chunked framing with strict bounds. */
+static int h08_decode_chunked(const uint8_t *p, uint32_t n)
+{
+    uint32_t at = 0U, used = 0U;
+    while (at < n) {
+        uint32_t chunk = 0U, digits = 0U;
+        while (at < n && p[at] != '\r' && p[at] != ';') {
+            int digit = h08_hex_digit(p[at++]);
+            if (digit < 0 || chunk > (BINFS_MAX_FILE_SIZE - (uint32_t)digit) / 16U)
+                return -1;
+            chunk = chunk * 16U + (uint32_t)digit;
+            digits++;
+        }
+        if (digits == 0U) return -1;
+        while (at < n && p[at] != '\r') at++; /* extension */
+        if (at + 1U >= n || p[at] != '\r' || p[at + 1U] != '\n')
+            return -1;
+        at += 2U;
+        if (chunk == 0U) {
+            /* Trailers, including the empty trailer line. */
+            while (at + 1U < n) {
+                uint32_t start = at;
+                while (at + 1U < n && !(p[at] == '\r' && p[at + 1U] == '\n'))
+                    at++;
+                if (at + 1U >= n) return -1;
+                uint32_t line_len = at - start;
+                at += 2U;
+                if (line_len == 0U) return at == n ? (int)used : -1;
+            }
+            return -1;
+        }
+        if (chunk > BINFS_MAX_FILE_SIZE - used ||
+            at + chunk + 2U > n) return -1;
+        for (uint32_t i = 0; i < chunk; i++)
+            h08_body[used + i] = p[at + i];
+        used += chunk;
+        at += chunk;
+        if (p[at] != '\r' || p[at + 1U] != '\n') return -1;
+        at += 2U;
+    }
+    return -1;
+}
+
+/* Decode only a complete HTTP response after TCP FIN was received. */
+static int h08_extract_body(uint32_t captured)
+{
+    uint32_t body_off;
+    if (!h08_http_valid_status(h08_capture, captured) ||
+        h08_header_end(h08_capture, captured, &body_off) != 0 ||
+        body_off > 3072U) return -1;
+    if (h08_capture[9] != '2' || h08_capture[10] != '0' ||
+        h08_capture[11] != '0') {
+        serial_write("HTTP08D: HTTP NO ES 200, NO GUARDAR\n");
+        return -1;
+    }
+    int has_length = 0, has_chunked = 0;
+    uint32_t content_length = 0U;
+    uint32_t line = 0U;
+    while (line + 1U < body_off &&
+           !(h08_capture[line] == '\r' && h08_capture[line + 1U] == '\n'))
+        line++;
+    if (line + 1U >= body_off) return -1;
+    line += 2U;
+    while (line + 1U < body_off) {
+        uint32_t end = line;
+        while (end + 1U < body_off &&
+               !(h08_capture[end] == '\r' && h08_capture[end + 1U] == '\n'))
+            end++;
+        if (end + 1U >= body_off) return -1;
+        if (end == line) break;
+        uint32_t sep = line;
+        while (sep < end && h08_capture[sep] != ':') sep++;
+        if (sep == end) return -1;
+        uint32_t val = sep + 1U;
+        while (val < end && (h08_capture[val] == ' ' || h08_capture[val] == '\t')) val++;
+        if (h08_ci_name(h08_capture + line, sep - line, "Content-Length")) {
+            if (has_length || val == end) return -1;
+            has_length = 1;
+            while (val < end && h08_capture[val] >= '0' && h08_capture[val] <= '9') {
+                uint32_t digit = (uint32_t)(h08_capture[val++] - '0');
+                if (content_length > (BINFS_MAX_FILE_SIZE - digit) / 10U)
+                    return -1;
+                content_length = content_length * 10U + digit;
+            }
+            while (val < end && (h08_capture[val] == ' ' || h08_capture[val] == '\t')) val++;
+            if (val != end) return -1;
+        } else if (h08_ci_name(h08_capture + line, sep - line, "Transfer-Encoding")) {
+            /* This minimal client supports only a single 'chunked' transfer coding. */
+            if (has_chunked || end - val != 7U ||
+                !h08_ci_name(h08_capture + val, end - val, "chunked"))
+                return -1;
+            has_chunked = 1;
+        }
+        line = end + 2U;
+    }
+    if (has_chunked && has_length) return -1;
+    uint32_t payload_len = captured - body_off;
+    if (has_chunked) {
+        int n = h08_decode_chunked(h08_capture + body_off, payload_len);
+        if (n <= 0) return -1;
+        h08_body_size = (uint32_t)n;
+    } else {
+        if (payload_len == 0U || payload_len > BINFS_MAX_FILE_SIZE)
+            return -1;
+        if (has_length && content_length != payload_len)
+            return -1;
+        h08_body_size = payload_len;
+        for (uint32_t i = 0U; i < payload_len; i++)
+            h08_body[i] = h08_capture[body_off + i];
+    }
+    serial_write("HTTP08D: CUERPO RECIBIDO BYTES = ");
+    serial_write_hex32(h08_body_size);
+    serial_write("\n");
+    return 0;
+}
+
+static int h08_binfs_save(void)
+{
+    if (h08_body_size == 0U || h08_body_size > BINFS_MAX_FILE_SIZE ||
+        !h08_valid_filename(h08_filename)) return -1;
+    int count = binfs_count();
+    if (count < 0 || count > 4) {
+        serial_write("HTTP08D: CATALOGO BINFS INVALIDO\n");
+        return -1;
+    }
+    int exists = 0;
+    /* Query physical slot indices; deleted entries are not readable. */
+    for (uint32_t i = 0U; i < 4U; i++) {
+        BinfsEntry entry;
+        if (binfs_get_entry(i, &entry) != 0) continue;
+        uint32_t j = 0U;
+        while (j < 32U && entry.name[j] && h08_filename[j] &&
+               entry.name[j] == h08_filename[j]) j++;
+        if (j < 32U && entry.name[j] == 0 && h08_filename[j] == 0)
+            exists = 1;
+    }
+    if (!exists) {
+        if (binfs_create_from_buffer(h08_filename, h08_body, h08_body_size) != 0) {
+            serial_write("HTTP08D: NO SE PUDO CREAR EN BINFS\n");
+            return -1;
+        }
+        serial_write("HTTP08D: ARCHIVO BINFS CREADO\n");
+    } else {
+        serial_write("HTTP08D: ARCHIVO EXISTENTE; VERIFICANDO\n");
+    }
+    uint32_t read_size = 0U;
+    if (binfs_read(h08_filename, h08_disk_verify,
+                   sizeof(h08_disk_verify), &read_size) != 0 ||
+        read_size != h08_body_size) return -1;
+    for (uint32_t i = 0U; i < read_size; i++)
+        if (h08_disk_verify[i] != h08_body[i]) {
+            serial_write("HTTP08D: EXISTENTE DISTINTO: NO SOBRESCRIBIR\n");
+            return -1;
+        }
+    serial_write("HTTP08D: ARCHIVO = ");
+    serial_write(h08_filename);
+    serial_write("\nHTTP08D: BINFS READBACK OK\n");
+    return 0;
+}
+
 static int h08_http_get_public(void)
 {
-    static const uint8_t request[] =
-        "GET / HTTP/1.0\r\n"
-        "Host: example.com\r\n"
-        "User-Agent: MiOS-HTTP08\r\n"
-        "Accept-Encoding: identity\r\n"
-        "Connection: close\r\n"
-        "\r\n";
-    uint32_t request_len = (uint32_t)(sizeof(request) - 1U);
+    static uint8_t request[1024];
+    int request_len = h08_build_request(request, sizeof(request));
+    if (request_len <= 0) return -1;
     if (h08_tcp_send(0x18U, h08_send_next, h08_recv_next,
-                     request, request_len) != 0)
+                     request, (uint32_t)request_len) != 0)
         return -1;
-    h08_send_next += request_len;
+    h08_send_next += (uint32_t)request_len;
     serial_write("HTTP08C: GET PUBLICO ENVIADO\n");
 
     uint32_t capture_size = 0U;
     uint32_t total_received = 0U;
     int status_ok = 0;
-    int fin_seen = 0;
-    int fin_ack_seen = 0;
 
+    /* The request forces Connection: close. Completion requires TCP FIN. */
     for (uint32_t n = 0; n < 512U; n++) {
         int len = h08_rx_poll();
-        if (len == 0) {
-            /* At least the valid HTTP status and a TCP ACK are needed. */
-            if (status_ok) {
-                serial_write("HTTP08C: SERVIDOR NO CERRO A TIEMPO\n");
-                return 0;
-            }
+        if (len <= 0) {
+            serial_write("HTTP08C: SIN FIN O TIMEOUT, RESPUESTA INCOMPLETA\n");
             return -1;
         }
-        if (len < 0) return -1;
         h08_tcp_info t;
         if (h08_tcp_parse(len, &t) != 0) continue;
         if (t.flags & 0x04U) {
             serial_write("HTTP08C: TCP RST RECIBIDO\n");
             return -1;
         }
-        if ((t.flags & 0x10U) == 0U) continue;
-        if (t.ack > h08_send_next) continue;
-        if (fin_seen && t.ack == h08_send_next)
-            fin_ack_seen = 1;
+        if ((t.flags & 0x10U) == 0U || t.ack != h08_send_next)
+            continue;
 
-        /* Trim any duplicate prefix, ignore out-of-order future segments. */
         uint32_t trim = 0U;
         int32_t diff = (int32_t)(t.seq - h08_recv_next);
         if (diff > 0) {
@@ -585,13 +984,14 @@ static int h08_http_get_public(void)
         if (trim > t.payload_size) trim = t.payload_size;
         uint32_t fresh = t.payload_size - trim;
         if (fresh) {
-            if (total_received > 32768U - fresh) {
-                serial_write("HTTP08C: RESPUESTA EXCEDE 32KB\n");
+            if (fresh > 32768U - total_received ||
+                fresh > H08_CAPTURE_MAX - capture_size) {
+                serial_write("HTTP08D: RESPUESTA SUPERA BUFFER HTTP\n");
                 return -1;
             }
-            for (uint32_t i = 0; i < fresh &&
-                 capture_size < H08_CAPTURE_MAX; i++)
-                h08_capture[capture_size++] = t.payload[trim + i];
+            for (uint32_t i = 0U; i < fresh; i++)
+                h08_capture[capture_size + i] = t.payload[trim + i];
+            capture_size += fresh;
             total_received += fresh;
             h08_recv_next += fresh;
         }
@@ -612,19 +1012,19 @@ static int h08_http_get_public(void)
             if (h08_tcp_send(0x11U, h08_send_next,
                              h08_recv_next, 0, 0U) != 0) return -1;
             h08_send_next++;
-            fin_seen = 1;
-            if (status_ok) {
-                serial_write("HTTP08C: HTTP PUBLICO RECIBIDO\n");
-                return 0;
+            if (!status_ok) return -1;
+            if (h08_extract_body(capture_size) != 0) {
+                serial_write("HTTP08D: CUERPO HTTP INVALIDO/O MUY GRANDE\n");
+                return -1;
             }
-            return -1;
+            serial_write("HTTP08C: HTTP PUBLICO RECIBIDO\n");
+            return 0;
         }
-        if (fin_ack_seen && status_ok) return 0;
     }
-    return status_ok ? 0 : -1;
+    return -1;
 }
 
-/* Public entrypoint: called once from the desktop event loop. */
+/* Public entrypoint, one HTTP request per boot. */
 static int mios_http08_public_test(void)
 {
     if (h08_test_used) {
@@ -632,8 +1032,17 @@ static int mios_http08_public_test(void)
         return -1;
     }
     h08_test_used = 1;
-    serial_write("\n=== MiOS HTTP 0.8A-C: INTERNET PUBLICO ===\n");
-    serial_write("HTTP08: HOST = example.com, PUERTO = 80\n");
+    if (!h08_url_configured &&
+        h08_set_url_from_gui("DOWNLOAD HTTP://EXAMPLE.COM/") != 0)
+        return -1;
+    h08_body_size = 0U;
+    serial_write("\n=== MiOS HTTP 0.8D/E: INTERNET PUBLICO ===\n");
+    serial_write("HTTP08: URL = ");
+    serial_write(h08_url);
+    serial_write("\n");
+    if (h08_bridge_mode)
+        serial_write("HTTPS: PUENTE LOCAL WSL; TLS NO ES NATIVO DE MiOS\n");
+
     if (h08_nic_start() != 0) {
         serial_write("HTTP08: ERROR INICIANDO DMA RTL8139\n");
         return -1;
@@ -643,16 +1052,24 @@ static int mios_http08_public_test(void)
         return -1;
     }
     serial_write("HTTP08A: GATEWAY MAC RESUELTA\n");
-    if (h08_arp_resolve(h08_dns_ip, h08_dns_mac) != 0) {
-        serial_write("HTTP08B: ERROR ARP DNS\n");
-        return -1;
-    }
-    if (h08_dns_get_a(h08_target_ip) != 0) {
-        serial_write("HTTP08B: ERROR DNS PUBLICO\n");
-        return -1;
+
+    if (h08_bridge_mode) {
+        for (uint32_t i = 0U; i < 4U; i++)
+            h08_target_ip[i] = h08_gateway_ip[i];
+        h08_target_port = 8081U;
+        serial_write("HTTPS: DESTINO PUENTE 10.0.2.2:8081\n");
+    } else {
+        if (h08_arp_resolve(h08_dns_ip, h08_dns_mac) != 0) {
+            serial_write("HTTP08B: ERROR ARP DNS\n");
+            return -1;
+        }
+        h08_target_port = 80U;
+        if (h08_dns_get_a(h08_target_ip) != 0) {
+            serial_write("HTTP08B: ERROR DNS PUBLICO\n");
+            return -1;
+        }
     }
 
-    /* These TSC bits vary per boot, unlike the fixed 0.4 lab SEQ. */
     uint32_t tsc_lo, tsc_hi;
     __asm__ volatile("rdtsc" : "=a"(tsc_lo), "=d"(tsc_hi));
     h08_iss = (tsc_lo ^ (tsc_hi << 7)) + 0x12345678U;
@@ -669,6 +1086,13 @@ static int mios_http08_public_test(void)
         return -1;
     }
     serial_write("HTTP08C: PRIMER GET PUBLICO COMPLETADO!\n");
-    serial_write("HTTP08: ESTA ETAPA NO GUARDA EL ARCHIVO EN BINFS\n");
+    if (h08_binfs_save() != 0) {
+        serial_write("HTTP08D: ERROR GUARDANDO EN BINFS\n");
+        return -1;
+    }
+    serial_write("HTTP08D: DESCARGA PUBLICA GUARDADA!\n");
+    serial_write("HTTP08E: URL VARIABLE COMPLETADA!\n");
+    if (h08_bridge_mode)
+        serial_write("HTTPS BRIDGE: DESCARGA HTTPS CON TLS EN UBUNTU OK\n");
     return 0;
 }

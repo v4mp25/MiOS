@@ -950,6 +950,11 @@ static uint8_t recover_catalog_buffer[512];
 /* HTTP 0.8A-C: primera prueba HTTP publica desde el escritorio. */
 static int mios_http08_public_test(void);
 static int mios_public08_mode = 0;
+/* HTTP08D/E: URL elegida desde el interprete grafico. */
+static int h08_is_gui_url_command(const char *line);
+static int h08_set_url_from_gui(const char *line);
+static const char *h08_get_filename(void);
+static int h08_using_bridge(void);
 static volatile int mios_download_pending = 0;
 
 /*
@@ -5854,6 +5859,8 @@ static void term_execute(void)
     term_print("HELP CLEAR ECHO MEM VER FILES");
     term_print("LS CAT DOWNLOAD");
         term_print("DOWNLOAD PUBLIC");
+        term_print("DOWNLOAD HTTP HOST/RUTA");
+        term_print("DOWNLOAD HTTPS HOST/RUTA");
 }
     else if (term_equals(term_input, "VER")) {
         term_print("MiOS Desktop 0.6");
@@ -5871,6 +5878,21 @@ static void term_execute(void)
                           (uint32_t)binfs_count());
     }
     
+else if (h08_is_gui_url_command(term_input)) {
+    if (mios_download_already_run) {
+        term_print("DOWNLOAD: SOLO UNO POR ARRANQUE");
+    } else if (mios_download_pending) {
+        term_print("DOWNLOAD: YA ESTA PENDIENTE");
+    } else if (h08_set_url_from_gui(term_input) != 0) {
+        term_print("DOWNLOAD: URL/NOMBRE INVALIDO");
+    } else {
+        mios_public08_mode = 1;
+        mios_download_pending = 1;
+        term_print("HTTP08: SOLICITUD REGISTRADA");
+        if (h08_using_bridge())
+            term_print("HTTPS: TLS SE HACE EN WSL");
+    }
+}
 else if (term_equals(term_input, "DOWNLOAD PUBLIC")) {
     if (mios_download_already_run) {
         term_print("PUBLIC: YA SE EJECUTO DOWNLOAD");
@@ -12107,8 +12129,10 @@ if (device == PS2_INPUT_KEYBOARD &&
             if (download_result == 0) {
 
                 if (mios_public08_mode) {
-                    term_print("HTTP PUBLICO: RESPUESTA RECIBIDA");
-                    term_print("VER DETALLES EN COM1");
+                    term_print("HTTP08: ARCHIVO BINFS OK");
+                    term_print(h08_get_filename());
+                    if (h08_using_bridge())
+                        term_print("HTTPS VIA WSL (NO NATIVO)");
                 } else {
                     term_print("DOWNLOAD: 3072 BYTES OK");
                     term_print("BINFS: http3072.bin OK");
